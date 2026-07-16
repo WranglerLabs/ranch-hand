@@ -1,0 +1,18 @@
+name: Feature request
+description: Propose an improvement to Ranch Hand.
+title: "feature: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Operator problem
+      description: Describe the problem independently of a preferred implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+    validations:
+      required: true

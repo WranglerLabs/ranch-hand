@@ -1,0 +1,33 @@
+name: Bug report
+description: Report a reproducible Ranch Hand defect.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Never include passwords, tokens, private keys, or unredacted diagnostics.
+  - type: input
+    id: version
+    attributes:
+      label: Ranch Hand version
+    validations:
+      required: true
+  - type: dropdown
+    id: target
+    attributes:
+      label: Deployment target
+      options: [Azure Container Apps, Cloudflare, Local Docker Compose, Remote Linux Docker Compose, Not target-specific]
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Include expected behavior and reproducible steps.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      render: shell

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/WranglerLabs/ranch-hand/contracts/deployment-plan.schema.json",
+  "title": "Ranch Hand deployment plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "name", "release", "target"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "manifestUrl"],
+      "properties": {
+        "version": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$" },
+        "manifestUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "manifestSha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["azure-container-apps", "cloudflare", "local-compose", "remote-linux-compose"] }
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "propertyNames": { "not": { "pattern": "(?i)(password|passphrase|private.?key|client.?secret|access.?token|api.?key|credential)" } }
+    }
+  }
+}

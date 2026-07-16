@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/WranglerLabs/ranch-hand/contracts/release-manifest.schema.json",
+  "title": "RepoWrangler release manifest consumed by Ranch Hand",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "product", "version", "releasedAt", "artifacts"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "product": { "const": "RepoWrangler" },
+    "version": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$" },
+    "releasedAt": { "type": "string", "format": "date-time" },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["target", "url", "sha256", "size"],
+        "properties": {
+          "target": { "enum": ["azure-container-apps", "cloudflare", "local-compose", "remote-linux-compose"] },
+          "url": { "type": "string", "format": "uri", "pattern": "^https://" },
+          "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+          "size": { "type": "integer", "minimum": 1 },
+          "mediaType": { "type": "string" },
+          "attestationUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
+          "sbomUrl": { "type": "string", "format": "uri", "pattern": "^https://" }
+        }
+      }
+    }
+  }
+}

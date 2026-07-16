@@ -1,0 +1,16 @@
+{
+  "name": "ranch-hand",
+  "private": true,
+  "version": "0.1.0-dev",
+  "description": "Windows-first lifecycle manager for RepoWrangler",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@11.13.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "corepack pnpm --dir web build",
+    "dev": "corepack pnpm --dir web dev",
+    "typecheck": "corepack pnpm --dir web typecheck"
+  }
+}

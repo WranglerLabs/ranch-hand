@@ -1,0 +1,14 @@
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+node_modules/
+web/node_modules/
+/dist/
+coverage/
+*.tsbuildinfo
+*.exe
+*.log
+.env
+.env.*
+!.env.example

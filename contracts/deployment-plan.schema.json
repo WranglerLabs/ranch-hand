@@ -29,7 +29,7 @@
     "configuration": {
       "type": "object",
       "additionalProperties": { "type": "string" },
-      "propertyNames": { "not": { "pattern": "(?i)(password|passphrase|private.?key|client.?secret|access.?token|api.?key|credential)" } }
+      "propertyNames": { "not": { "pattern": "(?:[Pp][Aa][Ss][Ss](?:[Ww][Oo][Rr][Dd]|[Pp][Hh][Rr][Aa][Ss][Ee])?|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].?[Kk][Ee][Yy]|[Cc][Ll][Ii][Ee][Nn][Tt].?[Ss][Ee][Cc][Rr][Ee][Tt]|[Aa][Cc][Cc][Ee][Ss][Ss].?[Tt][Oo][Kk][Ee][Nn]|[Aa][Pp][Ii].?[Kk][Ee][Yy]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll])" } }
     }
   }
 }

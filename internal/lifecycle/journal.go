@@ -18,7 +18,10 @@ import (
 	"github.com/WranglerLabs/ranch-hand/internal/plan"
 )
 
-const JournalSchemaVersion = "1.0"
+const (
+	JournalSchemaVersion       = "1.1"
+	legacyJournalSchemaVersion = "1.0"
+)
 
 type OperationKind string
 
@@ -63,6 +66,7 @@ type Journal struct {
 	Target        string          `json:"target"`
 	FromVersion   string          `json:"fromVersion,omitempty"`
 	ToVersion     string          `json:"toVersion"`
+	InputBackupID string          `json:"inputBackupId,omitempty"`
 	PlanSHA256    string          `json:"planSha256"`
 	Plan          json.RawMessage `json:"plan"`
 	StartedAt     time.Time       `json:"startedAt"`
@@ -131,6 +135,10 @@ func DeploymentID(candidate plan.DeploymentPlan) (string, error) {
 }
 
 func (s *Store) Begin(kind OperationKind, candidate plan.DeploymentPlan, fromVersion string) (Journal, error) {
+	return s.BeginWithInputBackup(kind, candidate, fromVersion, "")
+}
+
+func (s *Store) BeginWithInputBackup(kind OperationKind, candidate plan.DeploymentPlan, fromVersion, inputBackupID string) (Journal, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !validKinds[kind] {
@@ -141,6 +149,9 @@ func (s *Store) Begin(kind OperationKind, candidate plan.DeploymentPlan, fromVer
 	}
 	if err := validateOperationVersions(kind, fromVersion); err != nil {
 		return Journal{}, err
+	}
+	if (kind == Restore || kind == Rollback) != idPattern.MatchString(inputBackupID) {
+		return Journal{}, errors.New("restore and rollback require one valid input backup identity; other operations cannot declare one")
 	}
 	deploymentID, err := DeploymentID(candidate)
 	if err != nil {
@@ -204,7 +215,8 @@ func (s *Store) Begin(kind OperationKind, candidate plan.DeploymentPlan, fromVer
 	journal := Journal{
 		SchemaVersion: JournalSchemaVersion, OperationID: operationID, DeploymentID: deploymentID,
 		Kind: kind, Target: candidate.Target.Kind, FromVersion: fromVersion, ToVersion: candidate.Release.Version,
-		PlanSHA256: hex.EncodeToString(planDigest[:]), Plan: append(json.RawMessage(nil), canonical...), StartedAt: started, UpdatedAt: started,
+		InputBackupID: inputBackupID,
+		PlanSHA256:    hex.EncodeToString(planDigest[:]), Plan: append(json.RawMessage(nil), canonical...), StartedAt: started, UpdatedAt: started,
 	}
 	journal.Events = append(journal.Events, makeEvent(1, Prepared, started, journalHeaderHash(journal), ""))
 	journal.Phase = Prepared
@@ -339,8 +351,8 @@ func validateCommitSequence(journal Journal) error {
 			return errors.New("backup cannot commit before backup-complete")
 		}
 	case Restore, Repair, Rollback:
-		if !seen[Applied] || !seen[Verified] {
-			return fmt.Errorf("%s cannot commit before applied and verified phases", journal.Kind)
+		if !seen[BackupComplete] || !seen[Applied] || !seen[Verified] {
+			return fmt.Errorf("%s cannot commit before backup, applied, and verified phases", journal.Kind)
 		}
 	case Uninstall:
 		if !seen[Applied] {
@@ -368,11 +380,17 @@ func readJournal(filename string) (Journal, error) {
 }
 
 func (j Journal) Validate() error {
-	if j.SchemaVersion != JournalSchemaVersion || !idPattern.MatchString(j.OperationID) || !idPattern.MatchString(j.DeploymentID) || !validKinds[j.Kind] || !digestPattern.MatchString(j.PlanSHA256) || len(j.Events) == 0 {
+	if (j.SchemaVersion != JournalSchemaVersion && j.SchemaVersion != legacyJournalSchemaVersion) || !idPattern.MatchString(j.OperationID) || !idPattern.MatchString(j.DeploymentID) || !validKinds[j.Kind] || !digestPattern.MatchString(j.PlanSHA256) || len(j.Events) == 0 {
 		return errors.New("lifecycle journal identity is invalid")
 	}
 	if err := validateOperationVersions(j.Kind, j.FromVersion); err != nil {
 		return err
+	}
+	if j.SchemaVersion == legacyJournalSchemaVersion && (j.InputBackupID != "" || j.Kind == Restore || j.Kind == Rollback) {
+		return errors.New("legacy lifecycle journal cannot declare a restore input")
+	}
+	if j.SchemaVersion == JournalSchemaVersion && (j.Kind == Restore || j.Kind == Rollback) != idPattern.MatchString(j.InputBackupID) {
+		return errors.New("lifecycle journal input backup identity is invalid")
 	}
 	candidate, err := plan.DecodeAndValidate(j.Plan)
 	if err != nil {
@@ -419,7 +437,12 @@ func (j Journal) Validate() error {
 }
 
 func journalHeaderHash(journal Journal) string {
-	payload := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s", journal.SchemaVersion, journal.OperationID, journal.DeploymentID, journal.Kind, journal.Target, journal.FromVersion, journal.ToVersion, journal.PlanSHA256)
+	payload := ""
+	if journal.SchemaVersion == legacyJournalSchemaVersion {
+		payload = fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s", journal.SchemaVersion, journal.OperationID, journal.DeploymentID, journal.Kind, journal.Target, journal.FromVersion, journal.ToVersion, journal.PlanSHA256)
+	} else {
+		payload = fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s", journal.SchemaVersion, journal.OperationID, journal.DeploymentID, journal.Kind, journal.Target, journal.FromVersion, journal.ToVersion, journal.InputBackupID, journal.PlanSHA256)
+	}
 	digest := sha256.Sum256([]byte(payload))
 	return hex.EncodeToString(digest[:])
 }

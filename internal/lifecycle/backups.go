@@ -45,13 +45,21 @@ type BackupRecord struct {
 	Artifact      BackupArtifact `json:"artifact"`
 }
 
+// OperationBackups separates the immutable backup selected as restore input
+// from the fresh safety backup of the state being replaced. Update uses its
+// safety backup as both the migration source and recovery point.
+type OperationBackups struct {
+	Selected *BackupRecord `json:"selected,omitempty"`
+	Safety   *BackupRecord `json:"safety,omitempty"`
+}
+
 func (s *Store) RecordBackup(journal Journal, artifact BackupArtifact) (BackupRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := artifact.Validate(); err != nil {
 		return BackupRecord{}, err
 	}
-	if journal.Kind != Update && journal.Kind != Backup && journal.Kind != Repair {
+	if journal.Kind != Update && journal.Kind != Backup && journal.Kind != Restore && journal.Kind != Rollback && journal.Kind != Repair {
 		return BackupRecord{}, fmt.Errorf("%s operation cannot record a backup", journal.Kind)
 	}
 	directory := s.deploymentDirectory(journal.DeploymentID)

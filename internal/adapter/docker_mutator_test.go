@@ -80,7 +80,7 @@ func TestLocalDockerInstallUsesEngineAPI(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := &LocalDocker{client: server.Client(), baseURL: server.URL}
-	err := adapter.Apply(context.Background(), lifecycle.Install, localInstallPlan(), stagedComposeBundle(t), nil, Credentials{})
+	err := adapter.Apply(context.Background(), lifecycle.Install, localInstallPlan(), "", stagedComposeBundle(t), lifecycle.OperationBackups{}, Credentials{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestLocalDockerRecoveryDeletesOnlyOwnedContainer(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := &LocalDocker{client: server.Client(), baseURL: server.URL}
-	if err := adapter.Recover(context.Background(), lifecycle.Install, candidate, nil, Credentials{}); err != nil {
+	if err := adapter.Recover(context.Background(), lifecycle.Install, candidate, "", lifecycle.OperationBackups{}, Credentials{}); err != nil {
 		t.Fatal(err)
 	}
 	if !deleted {
@@ -161,7 +161,7 @@ func TestLocalDockerRecoveryRefusesUnownedContainer(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := &LocalDocker{client: server.Client(), baseURL: server.URL}
-	if err := adapter.Recover(context.Background(), lifecycle.Install, localInstallPlan(), nil, Credentials{}); err == nil {
+	if err := adapter.Recover(context.Background(), lifecycle.Install, localInstallPlan(), "", lifecycle.OperationBackups{}, Credentials{}); err == nil {
 		t.Fatal("recovery removed or accepted an unowned container")
 	}
 }
@@ -179,11 +179,12 @@ func TestLocalDockerRejectsTrailingJSON(t *testing.T) {
 
 func TestLocalDockerBackupStopsArchivesRestartsAndVerifies(t *testing.T) {
 	candidate := localInstallPlan()
+	expectedVersion := "v1.2.2"
 	deploymentID, err := lifecycle.DeploymentID(candidate)
 	if err != nil {
 		t.Fatal(err)
 	}
-	labels := map[string]string{"com.wranglerlabs.ranch-hand.managed": "true", "com.wranglerlabs.ranch-hand.deployment": deploymentID, "com.wranglerlabs.ranch-hand.version": "v1.2.3"}
+	labels := map[string]string{"com.wranglerlabs.ranch-hand.managed": "true", "com.wranglerlabs.ranch-hand.deployment": deploymentID, "com.wranglerlabs.ranch-hand.version": expectedVersion}
 	var stopped, restarted, archived bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -211,9 +212,9 @@ func TestLocalDockerBackupStopsArchivesRestartsAndVerifies(t *testing.T) {
 	backupRoot := t.TempDir()
 	adapter := &LocalDocker{
 		client: server.Client(), baseURL: server.URL, backupRoot: backupRoot,
-		healthClient: localHealthClient(t, "v1.2.3"),
+		healthClient: localHealthClient(t, expectedVersion),
 	}
-	artifact, err := adapter.Backup(context.Background(), candidate, Credentials{})
+	artifact, err := adapter.Backup(context.Background(), candidate, expectedVersion, Credentials{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +259,7 @@ func TestLocalDockerBackupRefusesUnownedVolumeBeforeStopping(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := &LocalDocker{client: server.Client(), baseURL: server.URL, backupRoot: t.TempDir()}
-	if _, err := adapter.Backup(context.Background(), candidate, Credentials{}); err == nil {
+	if _, err := adapter.Backup(context.Background(), candidate, candidate.Release.Version, Credentials{}); err == nil {
 		t.Fatal("backup accepted an unowned data volume")
 	}
 }
@@ -343,11 +344,81 @@ func TestLocalDockerUpdateUsesCopyOnWriteVolume(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := &LocalDocker{client: server.Client(), baseURL: server.URL, backupRoot: backupRoot}
-	if err := adapter.Apply(context.Background(), lifecycle.Update, candidate, stagedComposeBundle(t), &backup, Credentials{}); err != nil {
+	if err := adapter.Apply(context.Background(), lifecycle.Update, candidate, "v1.2.2", stagedComposeBundle(t), lifecycle.OperationBackups{Safety: &backup}, Credentials{}); err != nil {
 		t.Fatal(err)
 	}
 	if !stopped || !renamed || !restored || !started {
 		t.Fatalf("update sequence incomplete: stop=%t rename=%t restore=%t start=%t", stopped, renamed, restored, started)
+	}
+}
+
+func TestLocalDockerRestoreAndRollbackUseSelectedBackupWithFreshSafetyIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		kind        lifecycle.OperationKind
+		fromVersion string
+	}{
+		{name: "restore", kind: lifecycle.Restore, fromVersion: "v1.2.3"},
+		{name: "rollback", kind: lifecycle.Rollback, fromVersion: "v1.2.4"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := localInstallPlan()
+			backupRoot := t.TempDir()
+			selected := localUpdateBackup(t, candidate, backupRoot)
+			selected.Version = candidate.Release.Version
+			safety := selected
+			safety.BackupID = strings.Repeat("e", 32)
+			safety.OperationID = strings.Repeat("f", 32)
+			safety.Version = test.fromVersion
+			labels := map[string]string{
+				"com.wranglerlabs.ranch-hand.managed": "true", "com.wranglerlabs.ranch-hand.deployment": selected.DeploymentID,
+				"com.wranglerlabs.ranch-hand.version": test.fromVersion,
+			}
+			candidateVolume := updateVolumeName(selected.DeploymentID, safety.BackupID)
+			var renamed, restored bool
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/containers/repo-wrangler-server/json":
+					_ = json.NewEncoder(w).Encode(map[string]any{"Id": "current-id", "Config": map[string]any{"Labels": labels}, "State": map[string]any{"Running": true}, "Mounts": []map[string]string{{"Type": "volume", "Name": "current-volume", "Destination": "/app/data"}}})
+				case r.Method == http.MethodGet && r.URL.Path == "/volumes/current-volume":
+					_ = json.NewEncoder(w).Encode(map[string]any{"Labels": labels})
+				case r.Method == http.MethodPost && r.URL.Path == "/images/create":
+					_, _ = io.WriteString(w, "{\"status\":\"done\"}\n")
+				case r.Method == http.MethodGet && r.URL.Path == "/volumes/"+candidateVolume:
+					http.Error(w, "missing", http.StatusNotFound)
+				case r.Method == http.MethodPost && r.URL.Path == "/volumes/create":
+					w.WriteHeader(http.StatusCreated)
+					_, _ = io.WriteString(w, `{}`)
+				case r.Method == http.MethodPost && r.URL.Path == "/containers/current-id/stop":
+					w.WriteHeader(http.StatusNoContent)
+				case r.Method == http.MethodPost && r.URL.Path == "/containers/current-id/rename":
+					if r.URL.Query().Get("name") != rollbackContainerName("repo-wrangler", safety.BackupID) {
+						t.Fatal("replacement did not use the fresh safety backup identity")
+					}
+					renamed = true
+					w.WriteHeader(http.StatusNoContent)
+				case r.Method == http.MethodPost && r.URL.Path == "/containers/create":
+					w.WriteHeader(http.StatusCreated)
+					_, _ = io.WriteString(w, `{"Id":"replacement-id"}`)
+				case r.Method == http.MethodPut && r.URL.Path == "/containers/replacement-id/archive":
+					contents, _ := io.ReadAll(r.Body)
+					restored = string(contents) == "verified-update-backup"
+				case r.Method == http.MethodPost && r.URL.Path == "/containers/replacement-id/start":
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					t.Fatalf("unexpected %s Docker request: %s %s", test.name, r.Method, r.URL.String())
+				}
+			}))
+			defer server.Close()
+			adapter := &LocalDocker{client: server.Client(), baseURL: server.URL, backupRoot: backupRoot}
+			backups := lifecycle.OperationBackups{Selected: &selected, Safety: &safety}
+			if err := adapter.Apply(context.Background(), test.kind, candidate, test.fromVersion, stagedComposeBundle(t), backups, Credentials{}); err != nil {
+				t.Fatal(err)
+			}
+			if !renamed || !restored {
+				t.Fatalf("%s did not preserve current state and restore selected data", test.name)
+			}
+		})
 	}
 }
 
@@ -356,16 +427,22 @@ func TestLocalDockerUpdateRecoveryRestartsPreservedContainer(t *testing.T) {
 	backup := localUpdateBackup(t, candidate, t.TempDir())
 	newLabels := map[string]string{"com.wranglerlabs.ranch-hand.managed": "true", "com.wranglerlabs.ranch-hand.deployment": backup.DeploymentID, "com.wranglerlabs.ranch-hand.version": "v1.2.3"}
 	oldLabels := map[string]string{"com.wranglerlabs.ranch-hand.managed": "true", "com.wranglerlabs.ranch-hand.deployment": backup.DeploymentID, "com.wranglerlabs.ranch-hand.version": "v1.2.2"}
-	var removed, renamed, started bool
+	candidateVolume := updateVolumeName(backup.DeploymentID, backup.BackupID)
+	var removed, volumeRemoved, renamed, started bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/containers/repo-wrangler-server/json":
-			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "new-id", "Config": map[string]any{"Labels": newLabels}, "State": map[string]any{"Running": true}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "new-id", "Config": map[string]any{"Labels": newLabels}, "State": map[string]any{"Running": true}, "Mounts": []map[string]string{{"Type": "volume", "Name": candidateVolume, "Destination": "/app/data"}}})
 		case r.Method == http.MethodDelete && r.URL.Path == "/containers/new-id":
 			removed = true
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/containers/repo-wrangler-rollback-"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "old-id", "Config": map[string]any{"Labels": oldLabels}, "State": map[string]any{"Running": false}})
+		case r.Method == http.MethodGet && r.URL.Path == "/volumes/"+candidateVolume:
+			_ = json.NewEncoder(w).Encode(map[string]any{"Labels": oldLabels})
+		case r.Method == http.MethodDelete && r.URL.Path == "/volumes/"+candidateVolume:
+			volumeRemoved = true
+			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPost && r.URL.Path == "/containers/old-id/rename":
 			renamed = true
 			w.WriteHeader(http.StatusNoContent)
@@ -381,10 +458,52 @@ func TestLocalDockerUpdateRecoveryRestartsPreservedContainer(t *testing.T) {
 		client: server.Client(), baseURL: server.URL,
 		healthClient: localHealthClient(t, "v1.2.2"),
 	}
-	if err := adapter.Recover(context.Background(), lifecycle.Update, candidate, &backup, Credentials{}); err != nil {
+	if err := adapter.Recover(context.Background(), lifecycle.Update, candidate, backup.Version, lifecycle.OperationBackups{Safety: &backup}, Credentials{}); err != nil {
 		t.Fatal(err)
 	}
-	if !removed || !renamed || !started {
-		t.Fatalf("update recovery incomplete: remove=%t rename=%t start=%t", removed, renamed, started)
+	if !removed || !volumeRemoved || !renamed || !started {
+		t.Fatalf("update recovery incomplete: remove=%t volume=%t rename=%t start=%t", removed, volumeRemoved, renamed, started)
+	}
+}
+
+func TestLocalDockerSameVersionRestoreRecoveryUsesPreservedSafetyContainer(t *testing.T) {
+	candidate := localInstallPlan()
+	safety := localUpdateBackup(t, candidate, t.TempDir())
+	safety.Version = candidate.Release.Version
+	labels := map[string]string{
+		"com.wranglerlabs.ranch-hand.managed": "true", "com.wranglerlabs.ranch-hand.deployment": safety.DeploymentID,
+		"com.wranglerlabs.ranch-hand.version": candidate.Release.Version,
+	}
+	candidateVolume := updateVolumeName(safety.DeploymentID, safety.BackupID)
+	var removed, renamed bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/containers/repo-wrangler-rollback-"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "preserved-id", "Config": map[string]any{"Labels": labels}, "State": map[string]any{"Running": false}})
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/repo-wrangler-server/json":
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "replacement-id", "Config": map[string]any{"Labels": labels}, "State": map[string]any{"Running": true}, "Mounts": []map[string]string{{"Type": "volume", "Name": candidateVolume, "Destination": "/app/data"}}})
+		case r.Method == http.MethodDelete && r.URL.Path == "/containers/replacement-id":
+			removed = true
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/volumes/"+candidateVolume:
+			_ = json.NewEncoder(w).Encode(map[string]any{"Labels": labels})
+		case r.Method == http.MethodDelete && r.URL.Path == "/volumes/"+candidateVolume:
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && r.URL.Path == "/containers/preserved-id/rename":
+			renamed = true
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && r.URL.Path == "/containers/preserved-id/start":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected same-version recovery request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+	adapter := &LocalDocker{client: server.Client(), baseURL: server.URL, healthClient: localHealthClient(t, candidate.Release.Version)}
+	if err := adapter.Recover(context.Background(), lifecycle.Restore, candidate, candidate.Release.Version, lifecycle.OperationBackups{Safety: &safety}, Credentials{}); err != nil {
+		t.Fatal(err)
+	}
+	if !removed || !renamed {
+		t.Fatal("same-version replacement was accepted instead of restoring the preserved safety container")
 	}
 }

@@ -92,7 +92,7 @@ func TestAzureEvaluationInstallDeploysVerifiedTemplateAndChecksIdentity(t *testi
 	})}
 	candidate := azureEvaluationPlan()
 	credentials := Credentials{AzureAccessToken: "azure-token"}
-	if err := adapter.Apply(context.Background(), lifecycle.Install, candidate, stagedAzureBundle(t), nil, credentials); err != nil {
+	if err := adapter.Apply(context.Background(), lifecycle.Install, candidate, "", stagedAzureBundle(t), lifecycle.OperationBackups{}, credentials); err != nil {
 		t.Fatal(err)
 	}
 	if !groupCreated || !deploymentStarted {
@@ -126,7 +126,7 @@ func TestAzureInstallRecoveryDeletesOnlyOwnedResourceGroup(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := newAzureContainerApps(server.Client(), server.URL)
-	if err := adapter.Recover(context.Background(), lifecycle.Install, candidate, nil, Credentials{AzureAccessToken: "azure-token"}); err != nil {
+	if err := adapter.Recover(context.Background(), lifecycle.Install, candidate, "", lifecycle.OperationBackups{}, Credentials{AzureAccessToken: "azure-token"}); err != nil {
 		t.Fatal(err)
 	}
 	if !deleted {
@@ -146,7 +146,7 @@ func TestAzureInstallRecoveryRefusesUnownedResourceGroup(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := newAzureContainerApps(server.Client(), server.URL)
-	err := adapter.Recover(context.Background(), lifecycle.Install, azureEvaluationPlan(), nil, Credentials{AzureAccessToken: "azure-token"})
+	err := adapter.Recover(context.Background(), lifecycle.Install, azureEvaluationPlan(), "", lifecycle.OperationBackups{}, Credentials{AzureAccessToken: "azure-token"})
 	if err == nil || deleted {
 		t.Fatal("Azure recovery deleted or accepted an unowned resource group")
 	}

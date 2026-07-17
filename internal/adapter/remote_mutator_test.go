@@ -155,7 +155,7 @@ func TestRemoteEvaluationInstallTransfersVerifiedBundleAndChecksIdentity(t *test
 	adapter := newRemoteLinuxCompose(func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error) { return host, nil })
 	candidate := remoteEvaluationPlan()
 	credentials := Credentials{SSHPassword: "runtime-only"}
-	if err := adapter.Apply(context.Background(), lifecycle.Install, candidate, stagedRemoteBundle(t), nil, credentials); err != nil {
+	if err := adapter.Apply(context.Background(), lifecycle.Install, candidate, "", stagedRemoteBundle(t), lifecycle.OperationBackups{}, credentials); err != nil {
 		t.Fatal(err)
 	}
 	if !host.directory || !host.resources || len(host.files) != 4 {
@@ -183,10 +183,10 @@ func TestRemoteRecoveryRemovesOnlyMarkerOwnedResources(t *testing.T) {
 	adapter := newRemoteLinuxCompose(func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error) { return host, nil })
 	candidate := remoteEvaluationPlan()
 	credentials := Credentials{SSHPassword: "runtime-only"}
-	if err := adapter.Apply(context.Background(), lifecycle.Install, candidate, stagedRemoteBundle(t), nil, credentials); err != nil {
+	if err := adapter.Apply(context.Background(), lifecycle.Install, candidate, "", stagedRemoteBundle(t), lifecycle.OperationBackups{}, credentials); err != nil {
 		t.Fatal(err)
 	}
-	if err := adapter.Recover(context.Background(), lifecycle.Install, candidate, nil, credentials); err != nil {
+	if err := adapter.Recover(context.Background(), lifecycle.Install, candidate, "", lifecycle.OperationBackups{}, credentials); err != nil {
 		t.Fatal(err)
 	}
 	if !host.composeDown || host.directory || host.resources {
@@ -199,11 +199,11 @@ func TestRemoteRecoveryRefusesUnownedContainer(t *testing.T) {
 	adapter := newRemoteLinuxCompose(func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error) { return host, nil })
 	candidate := remoteEvaluationPlan()
 	credentials := Credentials{SSHPassword: "runtime-only"}
-	if err := adapter.Apply(context.Background(), lifecycle.Install, candidate, stagedRemoteBundle(t), nil, credentials); err != nil {
+	if err := adapter.Apply(context.Background(), lifecycle.Install, candidate, "", stagedRemoteBundle(t), lifecycle.OperationBackups{}, credentials); err != nil {
 		t.Fatal(err)
 	}
 	host.unowned = true
-	if err := adapter.Recover(context.Background(), lifecycle.Install, candidate, nil, credentials); err == nil || host.composeDown {
+	if err := adapter.Recover(context.Background(), lifecycle.Install, candidate, "", lifecycle.OperationBackups{}, credentials); err == nil || host.composeDown {
 		t.Fatal("remote recovery deleted or accepted an unowned container")
 	}
 }

@@ -13,6 +13,8 @@ import (
 
 	"github.com/WranglerLabs/ranch-hand/internal/adapter"
 	"github.com/WranglerLabs/ranch-hand/internal/bundle"
+	"github.com/WranglerLabs/ranch-hand/internal/lifecycle"
+	"github.com/WranglerLabs/ranch-hand/internal/operations"
 	"github.com/WranglerLabs/ranch-hand/internal/plan"
 	productrelease "github.com/WranglerLabs/ranch-hand/internal/release"
 )
@@ -30,6 +32,15 @@ type fakeTargetPreflighter struct {
 
 type fakeBundleStager struct {
 	artifact productrelease.VerifiedArtifact
+}
+
+type fakeOperationRunner struct {
+	request operations.Request
+}
+
+func (f *fakeOperationRunner) Run(_ context.Context, request operations.Request) (operations.Result, error) {
+	f.request = request
+	return operations.Result{Journal: lifecycle.Journal{Phase: lifecycle.Committed}}, nil
 }
 
 func (f *fakeBundleStager) Stage(artifact productrelease.VerifiedArtifact) (bundle.StagedBundle, error) {
@@ -60,7 +71,8 @@ func TestCreateExportPreflightAndDryRunVerifiedPlan(t *testing.T) {
 	verifier := &fakeReleaseVerifier{cachePath: artifact}
 	targets := &fakeTargetPreflighter{}
 	stager := &fakeBundleStager{}
-	h := newWithServices("secret-token", "test", testUI(), verifier, targets, stager)
+	runner := &fakeOperationRunner{}
+	h := newWithServices("secret-token", "test", testUI(), verifier, targets, stager, runner)
 	manifest := "https://github.com/WranglerLabs/repo-wrangler/releases/download/v1.2.3/release-manifest.json"
 	verifyBody := `{"manifestUrl":"` + manifest + `","version":"v1.2.3","target":"local-compose"}`
 	response := authorizedPost(h, "/api/v1/releases/verify", verifyBody)
@@ -68,7 +80,7 @@ func TestCreateExportPreflightAndDryRunVerifiedPlan(t *testing.T) {
 		t.Fatalf("verification returned %d: %s", response.Code, response.Body.String())
 	}
 
-	createBody := `{"name":"Local Wrangler","version":"v1.2.3","target":"local-compose","configuration":{"projectName":"repo-wrangler","dataDirectory":"C:\\\\RepoWrangler\\\\data","listenAddress":"127.0.0.1:8080"}}`
+	createBody := `{"name":"Local Wrangler","version":"v1.2.3","target":"local-compose","configuration":{"projectName":"repo-wrangler","dataVolume":"repo-wrangler-data","listenAddress":"127.0.0.1:8080"}}`
 	response = authorizedPost(h, "/api/v1/plans/create", createBody)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("plan creation returned %d: %s", response.Code, response.Body.String())
@@ -96,6 +108,11 @@ func TestCreateExportPreflightAndDryRunVerifiedPlan(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"ready":true`) {
 		t.Fatalf("preflight returned %d: %s", response.Code, response.Body.String())
 	}
+	operationBody := `{"kind":"install","plan":` + string(created.Plan) + `,"credentials":{}}`
+	response = authorizedPost(h, "/api/v1/operations/run", operationBody)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("operation without live target preflight returned %d: %s", response.Code, response.Body.String())
+	}
 	targetBody := `{"plan":` + string(created.Plan) + `,"credentials":{"sshPassword":"runtime-only"}}`
 	response = authorizedPost(h, "/api/v1/targets/preflight", targetBody)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"ready":true`) {
@@ -110,6 +127,13 @@ func TestCreateExportPreflightAndDryRunVerifiedPlan(t *testing.T) {
 	}
 	if stager.artifact.SHA256 == "" || stager.artifact.Target != "local-compose" {
 		t.Fatal("stager did not receive the verified artifact")
+	}
+	response = authorizedPost(h, "/api/v1/operations/run", operationBody)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"completed":true`) {
+		t.Fatalf("operation returned %d: %s", response.Code, response.Body.String())
+	}
+	if runner.request.Kind != lifecycle.Install || runner.request.Artifact.SHA256 == "" {
+		t.Fatal("coordinator did not receive verified local install request")
 	}
 }
 

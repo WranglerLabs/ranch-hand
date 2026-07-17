@@ -70,10 +70,11 @@
     },
     "localCompose": {
       "type": "object", "additionalProperties": false,
-      "required": ["projectName", "dataDirectory", "listenAddress"],
+      "required": ["projectName", "dataVolume", "listenAddress"],
       "properties": {
-        "projectName": { "$ref": "#/$defs/value" }, "dataDirectory": { "$ref": "#/$defs/value" },
-        "listenAddress": { "$ref": "#/$defs/value" }
+        "projectName": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$" },
+        "dataVolume": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$" },
+        "listenAddress": { "type": "string", "pattern": "^127\\.0\\.0\\.1:[0-9]{4,5}$" }
       }
     },
     "remoteLinuxCompose": {

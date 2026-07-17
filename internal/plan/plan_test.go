@@ -73,3 +73,15 @@ func TestRejectsUnknownConfigurationField(t *testing.T) {
 		t.Fatal("expected unknown configuration field to be rejected")
 	}
 }
+
+func TestRejectsUnsafeLocalComposeInputs(t *testing.T) {
+	var candidate DeploymentPlan
+	if err := json.Unmarshal([]byte(validPlan), &candidate); err != nil {
+		t.Fatal(err)
+	}
+	candidate.Target.Kind = "local-compose"
+	candidate.Configuration = map[string]string{"projectName": "Repo Wrangler", "dataVolume": "Repo Wrangler Data", "listenAddress": "0.0.0.0:8080"}
+	if err := candidate.Validate(); err == nil {
+		t.Fatal("unsafe local Compose inputs were accepted")
+	}
+}

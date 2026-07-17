@@ -13,16 +13,24 @@ import (
 )
 
 type LocalDocker struct {
-	client *http.Client
+	client       *http.Client
+	baseURL      string
+	healthClient *http.Client
 }
 
 func NewLocalDocker() *LocalDocker {
-	return &LocalDocker{client: &http.Client{Transport: localDockerTransport(), Timeout: 30 * time.Second}}
+	return &LocalDocker{
+		client: &http.Client{Transport: localDockerTransport(), Timeout: 10 * time.Minute}, baseURL: "http://docker",
+	}
 }
 
 func (d *LocalDocker) Preflight(ctx context.Context, candidate plan.DeploymentPlan, _ Credentials) Report {
 	report := Report{Target: candidate.Target.Kind}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker/_ping", nil)
+	baseURL := d.baseURL
+	if baseURL == "" {
+		baseURL = "http://docker"
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/_ping", nil)
 	if err != nil {
 		appendCheck(&report, "docker-engine", false, err.Error())
 		return report
@@ -40,7 +48,7 @@ func (d *LocalDocker) Preflight(ctx context.Context, candidate plan.DeploymentPl
 	}
 	appendCheck(&report, "docker-engine", true, "Ranch Hand reached the local Docker Engine through its native API.")
 
-	request, _ = http.NewRequestWithContext(ctx, http.MethodGet, "http://docker/version", nil)
+	request, _ = http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/version", nil)
 	response, err = d.client.Do(request)
 	if err != nil {
 		appendCheck(&report, "docker-version", false, "Ranch Hand could not read the Docker Engine version: "+err.Error())

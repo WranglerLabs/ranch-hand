@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -41,10 +42,11 @@ var supportedTargets = map[string]bool{
 }
 
 var (
-	versionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$`)
-	digestPattern  = regexp.MustCompile(`^[a-f0-9]{64}$`)
-	namePattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,119}$`)
-	keyPattern     = regexp.MustCompile(`^[a-z][A-Za-z0-9]{0,63}$`)
+	versionPattern       = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$`)
+	digestPattern        = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	namePattern          = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,119}$`)
+	keyPattern           = regexp.MustCompile(`^[a-z][A-Za-z0-9]{0,63}$`)
+	dockerProjectPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 )
 
 var configurationFields = map[string]map[string]bool{
@@ -57,7 +59,7 @@ var configurationFields = map[string]map[string]bool{
 		"customDomain": false,
 	},
 	"local-compose": {
-		"projectName": true, "dataDirectory": true, "listenAddress": true,
+		"projectName": true, "dataVolume": true, "listenAddress": true,
 	},
 	"remote-linux-compose": {
 		"host": true, "port": true, "user": true, "installDirectory": true,
@@ -183,6 +185,19 @@ func (p DeploymentPlan) Validate() error {
 	if len(missing) > 0 {
 		sort.Strings(missing)
 		return fmt.Errorf("missing required configuration fields: %s", strings.Join(missing, ", "))
+	}
+	if p.Target.Kind == "local-compose" {
+		if !dockerProjectPattern.MatchString(p.Configuration["projectName"]) {
+			return errors.New("local-compose projectName must use lowercase letters, numbers, underscore, or hyphen")
+		}
+		if !dockerProjectPattern.MatchString(p.Configuration["dataVolume"]) {
+			return errors.New("local-compose dataVolume must use lowercase letters, numbers, underscore, or hyphen")
+		}
+		listen := strings.TrimPrefix(p.Configuration["listenAddress"], "127.0.0.1:")
+		port, err := strconv.Atoi(listen)
+		if err != nil || listen == p.Configuration["listenAddress"] || port < 1024 || port > 65535 {
+			return errors.New("local-compose listenAddress must use 127.0.0.1 and a port from 1024 through 65535")
+		}
 	}
 	return nil
 }

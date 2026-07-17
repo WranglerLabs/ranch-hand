@@ -34,6 +34,12 @@ button.secondary { border: 1px solid #52725e; color: #eaf4ee; background: transp
 .inline-result p { margin: 8px 0 0; }
 .digest { max-width: 340px; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .78rem; }
 .inline-result li { margin: 9px 0; color: #c5d7cb; line-height: 1.45; }
+.install-panel { display: grid; gap: 16px; }
+.install-panel p { margin: 0; }
+.confirmation { display: flex; grid-template-columns: none; align-items: center; gap: 10px; color: #c5d7cb; text-transform: none; }
+.confirmation input { width: 18px; min-height: 18px; }
+.install-panel button { justify-self: start; }
+.inline-result a { color: #e3a23b; }
 .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
 article { min-height: 180px; padding: 24px; border: 1px solid #263b30; border-radius: 18px; background: #101915cc; }
 article h3 { font-size: 1.2rem; } article p { color: #a9bcb0; line-height: 1.5; } article span { color: #e3a23b; font-size: .78rem; font-weight: 800; text-transform: uppercase; }

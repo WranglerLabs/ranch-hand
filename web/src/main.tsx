@@ -35,6 +35,7 @@ type PreflightReport = { ready: boolean; checks: { name: string; ok: boolean; me
 type DryRunReport = { mutated: boolean; steps: { order: number; description: string; mutates: boolean }[] };
 type TargetReport = { ready: boolean; target: string; checks: { name: string; ok: boolean; message: string }[] };
 type StagedBundle = { product: string; version: string; target: string; path: string; cacheHit: boolean };
+type OperationResult = { completed: boolean; operation: { journal: { phase: string } } };
 
 const targetFields: Record<string, { key: string; label: string; placeholder: string; optional?: boolean }[]> = {
   "azure-container-apps": [
@@ -53,7 +54,7 @@ const targetFields: Record<string, { key: string; label: string; placeholder: st
   ],
   "local-compose": [
     { key: "projectName", label: "Compose project", placeholder: "repo-wrangler" },
-    { key: "dataDirectory", label: "Data directory", placeholder: "C:\\RepoWrangler\\data" },
+    { key: "dataVolume", label: "Persistent Docker volume", placeholder: "repo-wrangler-data" },
     { key: "listenAddress", label: "Listen address", placeholder: "127.0.0.1:8080" },
   ],
   "remote-linux-compose": [
@@ -124,6 +125,9 @@ function App() {
   const [targetRunning, setTargetRunning] = useState(false);
   const [credentialEpoch, setCredentialEpoch] = useState(0);
   const [stagedBundle, setStagedBundle] = useState<StagedBundle | null>(null);
+  const [installConfirmed, setInstallConfirmed] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [operationResult, setOperationResult] = useState<OperationResult | null>(null);
 
   useEffect(() => {
     if (!token) {
@@ -143,6 +147,8 @@ function App() {
     setDryRun(null);
     setTargetReport(null);
     setStagedBundle(null);
+    setInstallConfirmed(false);
+    setOperationResult(null);
     try {
       const result = await api<{ verified: true; artifact: VerifiedArtifact }>("/api/v1/releases/verify", {
         method: "POST",
@@ -164,6 +170,8 @@ function App() {
     setDryRun(null);
     setTargetReport(null);
     setStagedBundle(null);
+    setInstallConfirmed(false);
+    setOperationResult(null);
     try {
       const cleaned = Object.fromEntries(Object.entries(configuration).filter(([, value]) => value.trim() !== ""));
       const result = await api<{ plan: DeploymentPlan }>("/api/v1/plans/create", {
@@ -232,6 +240,23 @@ function App() {
     }
   }
 
+  async function installLocal() {
+    if (!planResult || !installConfirmed) return;
+    setInstalling(true);
+    setPlanError("");
+    setOperationResult(null);
+    try {
+      setOperationResult(await api<OperationResult>("/api/v1/operations/run", {
+        method: "POST",
+        body: JSON.stringify({ kind: "install", plan: planResult, credentials: {} }),
+      }));
+    } catch (reason) {
+      setPlanError(reason instanceof Error ? reason.message : "Local installation failed");
+    } finally {
+      setInstalling(false);
+    }
+  }
+
   return (
     <main>
       <header>
@@ -251,7 +276,7 @@ function App() {
         <p>Choose an explicit release and deployment target. Ranch Hand downloads only the published bundle, verifies its declared size and SHA-256, and stores the verified bytes in its local versioned cache.</p>
         <form onSubmit={verifyRelease}>
           <label>Release version<input required pattern="v[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9.-]+)?" placeholder="v1.0.8" value={version} onChange={(event) => setVersion(event.target.value)} /></label>
-          <label>Deployment target<select value={target} onChange={(event) => { setTarget(event.target.value); setArtifact(null); setPlanResult(null); setConfiguration({}); setRuntimeCredentials({}); setTargetReport(null); setStagedBundle(null); }}><option value="azure-container-apps">Azure Container Apps</option><option value="cloudflare">Cloudflare</option><option value="local-compose">Local Docker Compose</option><option value="remote-linux-compose">Remote Linux Compose</option></select></label>
+          <label>Deployment target<select value={target} onChange={(event) => { setTarget(event.target.value); setArtifact(null); setPlanResult(null); setConfiguration({}); setRuntimeCredentials({}); setTargetReport(null); setStagedBundle(null); setInstallConfirmed(false); setOperationResult(null); }}><option value="azure-container-apps">Azure Container Apps</option><option value="cloudflare">Cloudflare</option><option value="local-compose">Local Docker Compose</option><option value="remote-linux-compose">Remote Linux Compose</option></select></label>
           <button type="submit" disabled={verifying || !token}>{verifying ? "Verifying and caching…" : "Verify and cache release"}</button>
         </form>
         {releaseError && <div className="inline-result error" role="alert"><strong>Release rejected</strong><p>{releaseError}</p></div>}
@@ -277,6 +302,8 @@ function App() {
           <button type="submit" disabled={targetRunning}>{targetRunning ? "Checking target…" : "Run live target preflight"}</button>
         </form>}
         {targetReport && <div className={`inline-result ${targetReport.ready ? "success" : "error"}`}><strong>{targetReport.ready ? "Target is ready" : "Target preflight blocked"}</strong><ul>{targetReport.checks.map((check) => <li key={check.name}>{check.ok ? "✓" : "✕"} {check.message}</li>)}</ul></div>}
+        {target === "local-compose" && targetReport?.ready && stagedBundle && !operationResult && <div className="inline-result install-panel"><strong>Install loopback evaluation instance</strong><p>This first mutator installs RepoWrangler in demo mode with SQLite, binds only to 127.0.0.1, and creates no proxy or public ingress. Production credentials and update/backup controls are not enabled in this build.</p><label className="confirmation"><input type="checkbox" checked={installConfirmed} onChange={(event) => setInstallConfirmed(event.target.checked)} /> I understand this is a local evaluation install.</label><button type="button" disabled={!installConfirmed || installing} onClick={installLocal}>{installing ? "Installing and verifying…" : "Install local evaluation"}</button></div>}
+        {operationResult && <div className="inline-result success"><strong>Local RepoWrangler installation committed</strong><p>The container passed its readiness check and the lifecycle journal is {operationResult.operation.journal.phase}. Open <a href={`http://${planResult?.configuration.listenAddress}`} target="_blank" rel="noreferrer">http://{planResult?.configuration.listenAddress}</a>.</p></div>}
       </section>}
       <section className="grid" aria-label="Initial deployment targets">
         {[

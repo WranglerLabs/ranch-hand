@@ -2,7 +2,7 @@
 
 Ranch Hand is the standalone, Windows-first lifecycle manager for [RepoWrangler](https://github.com/WranglerLabs/repo-wrangler). It is for operators who want to install and manage RepoWrangler without cloning or forking its source repository. Contributors and advanced operators can still use RepoWrangler's documented deployment recipes directly.
 
-> **Status: Public Preview.** [`v0.1.0-rc.1`](docs/releases/v0.1.0-rc.1.md)
+> **Status: Public Preview.** [`v0.1.0-rc.2`](docs/releases/v0.1.0-rc.2.md)
 > is the primary recommended Windows deployment path for RepoWrangler. It is
 > publicly downloadable and functional, but it is unsigned and not production
 > supported or generally available. See the complete [GA readiness
@@ -31,7 +31,9 @@ Additional guides: [security model](docs/security-model.md) ·
 
 ## First release scope
 
-- Discover and verify an explicit immutable RepoWrangler release.
+- Discover the latest compatible stable RepoWrangler release by default, with
+  explicit prerelease and version-pinning choices, then verify the immutable
+  release.
 - Validate its version, SHA-256 digest, size, compatibility, SBOM, and attestation.
 - Create a versioned, secret-free deployment plan.
 - Preflight, dry run, install, backup-first update/restore/rollback/repair, verify, export, and produce redacted diagnostics.
@@ -47,7 +49,7 @@ Plans must never contain passwords, tokens, private keys, client secrets, or pro
 
 ## Release verification
 
-The local interface accepts an explicit RepoWrangler version and deployment target. Ranch Hand retrieves the official versioned manifest and target bundle over HTTPS, restricts redirects to the trusted GitHub release infrastructure, enforces response-size limits, verifies the declared byte count and SHA-256, and atomically stores the verified bundle in the user's versioned application cache. A matching cached file is hashed again before reuse; partial or mismatched downloads are removed.
+The local interface discovers and preselects the latest published stable RepoWrangler release that contains an artifact for the chosen target. Operators can intentionally select the latest prerelease or enter a specific immutable version under the advanced choice. Ranch Hand retrieves the official versioned manifest and target bundle over HTTPS, restricts redirects to the trusted GitHub release infrastructure, enforces response-size limits, verifies the declared byte count and SHA-256, and atomically stores the verified bundle in the user's versioned application cache. A matching cached file is hashed again before reuse; partial or mismatched downloads are removed.
 
 Ranch Hand also downloads the release's SPDX SBOM and Sigstore provenance bundle. It verifies the Sigstore trust root through TUF, the certificate and transparency-log evidence, the exact RepoWrangler release-workflow identity, the SLSA provenance predicate, and both the deployment bundle and SBOM digests before classifying the release as verified. This verification is built into Ranch Hand and does not require a GitHub account, GitHub CLI, or Cosign installation.
 

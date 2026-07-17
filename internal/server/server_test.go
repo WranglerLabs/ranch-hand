@@ -22,8 +22,10 @@ import (
 func testUI() fs.FS { return fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("ok")}} }
 
 type fakeReleaseVerifier struct {
-	request   productrelease.Request
-	cachePath string
+	request          productrelease.Request
+	cachePath        string
+	discoveryChannel string
+	discoveryTarget  string
 }
 
 type fakeTargetPreflighter struct {
@@ -112,6 +114,14 @@ func (f *fakeReleaseVerifier) VerifyAndCache(_ context.Context, request productr
 		ManifestURL: request.ManifestURL, ManifestSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		SHA256: "1e6ed65d77d6364eeaed5a745ba5c4985ae2b700dd85d7cf7f027bdf294a33fc", Size: 6,
 		ProvenanceVerified: true, SBOMVerified: true,
+	}, nil
+}
+
+func (f *fakeReleaseVerifier) Discover(_ context.Context, channel, target string) (productrelease.DiscoveredRelease, error) {
+	f.discoveryChannel = channel
+	f.discoveryTarget = target
+	return productrelease.DiscoveredRelease{
+		Version: "v1.0.10", ManifestURL: "https://github.com/WranglerLabs/repo-wrangler/releases/download/v1.0.10/release-manifest.json",
 	}, nil
 }
 
@@ -223,6 +233,21 @@ func authorizedPost(h http.Handler, path, body string) *httptest.ResponseRecorde
 	response := httptest.NewRecorder()
 	h.ServeHTTP(response, request)
 	return response
+}
+
+func TestRecommendsLatestCompatibleRelease(t *testing.T) {
+	verifier := &fakeReleaseVerifier{}
+	h := NewWithReleaseVerifier("secret-token", "test", testUI(), verifier)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/releases/recommended?channel=stable&target=local-compose", nil)
+	request.Header.Set("Authorization", "Bearer secret-token")
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"version":"v1.0.10"`) {
+		t.Fatalf("recommended release returned %d: %s", response.Code, response.Body.String())
+	}
+	if verifier.discoveryChannel != "stable" || verifier.discoveryTarget != "local-compose" {
+		t.Fatalf("unexpected discovery request: %s / %s", verifier.discoveryChannel, verifier.discoveryTarget)
+	}
 }
 
 func TestListsInstallationRecords(t *testing.T) {

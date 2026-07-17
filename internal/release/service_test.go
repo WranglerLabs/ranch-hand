@@ -109,6 +109,41 @@ func TestVerifyAndCacheArtifact(t *testing.T) {
 	}
 }
 
+func TestDiscoversNewestCompatibleStableRelease(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/releases":
+			_ = json.NewEncoder(response).Encode([]map[string]any{
+				{"tag_name": "v1.0.11-rc.1", "draft": false, "prerelease": true, "assets": []map[string]string{{"name": "release-manifest.json", "browser_download_url": server.URL + "/v1.0.11-rc.1/release-manifest.json"}}},
+				{"tag_name": "v1.0.10", "draft": false, "prerelease": false, "assets": []map[string]string{{"name": "release-manifest.json", "browser_download_url": server.URL + "/v1.0.10/release-manifest.json"}}},
+			})
+		case "/v1.0.10/release-manifest.json":
+			_ = json.NewEncoder(response).Encode(Manifest{SchemaVersion: SchemaVersion, Product: Product, Version: "v1.0.10", ReleasedAt: "2026-07-17T12:00:00Z", Artifacts: []Artifact{{
+				Target: "local-compose", URL: server.URL + "/v1.0.10/bundle.tar.gz", SHA256: strings.Repeat("a", 64), Size: 42,
+			}}})
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	parsed, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewServiceWithClient(t.TempDir(), server.Client(), []string{parsed.Hostname()}, server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	discovered, err := service.Discover(context.Background(), "stable", "local-compose")
+	if err != nil {
+		t.Fatalf("discover stable release: %v", err)
+	}
+	if discovered.Version != "v1.0.10" || discovered.Prerelease || discovered.ManifestURL != server.URL+"/v1.0.10/release-manifest.json" {
+		t.Fatalf("unexpected discovery result: %+v", discovered)
+	}
+}
+
 func TestRejectsUnverifiedProvenance(t *testing.T) {
 	contents := []byte("bundle")
 	_, service, request := releaseServer(t, contents, digest(contents))

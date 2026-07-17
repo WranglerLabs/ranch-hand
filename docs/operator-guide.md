@@ -11,7 +11,7 @@ its [manual deployment recipes](https://github.com/WranglerLabs/repo-wrangler/tr
 
 ## Current availability
 
-There is no signed GA Ranch Hand installer yet. `v0.1.0-rc.1` is an unsigned
+There is no signed GA Ranch Hand installer yet. `v0.1.0-rc.2` is an unsigned
 Public Preview published as a stable prerelease download. It is intended for
 evaluation and feedback, not production support.
 
@@ -22,13 +22,13 @@ organizational security policy.
 ## Download and verify the Public Preview
 
 1. Open the public [Ranch Hand for Windows guide](https://wranglerlabs.org/ranch-hand)
-   and select **Download Ranch Hand v0.1.0-rc.1 for Windows (64-bit)**. A GitHub
+   and select **Download Ranch Hand v0.1.0-rc.2 for Windows (64-bit)**. A GitHub
    account is not required.
 2. In PowerShell, verify the executable before running it:
 
    ```powershell
-   Get-FileHash .\ranch-hand-v0.1.0-rc.1-windows-amd64.exe -Algorithm SHA256
-   Get-AuthenticodeSignature .\ranch-hand-v0.1.0-rc.1-windows-amd64.exe
+   Get-FileHash .\ranch-hand-v0.1.0-rc.2-windows-amd64.exe -Algorithm SHA256
+   Get-AuthenticodeSignature .\ranch-hand-v0.1.0-rc.2-windows-amd64.exe
    ```
 
    Expected SHA-256:
@@ -42,7 +42,7 @@ organizational security policy.
 3. For optional GitHub provenance verification, install GitHub CLI and run:
 
    ```powershell
-   gh attestation verify .\ranch-hand-v0.1.0-rc.1-windows-amd64.exe `
+   gh attestation verify .\ranch-hand-v0.1.0-rc.2-windows-amd64.exe `
      --repo WranglerLabs/ranch-hand
    ```
 
@@ -51,7 +51,7 @@ Windows code-signing certificate.
 
 ## Launch Ranch Hand
 
-Double-click `ranch-hand-v0.1.0-rc.1-windows-amd64.exe`, or start it from
+Double-click `ranch-hand-v0.1.0-rc.2-windows-amd64.exe`, or start it from
 PowerShell. Ranch Hand binds a random port on `127.0.0.1`, opens the interface in
 your default browser, and protects that browser session with a random one-time
 launch token.
@@ -81,9 +81,12 @@ cleared after the operation.
 
 Use this sequence in the Ranch Hand interface:
 
-1. Under **Verify a RepoWrangler bundle**, enter `v1.0.10`, select the deployment
-   target, and choose **Verify and cache release**. Continue only when provenance,
-   SBOM, size, and SHA-256 all report verified.
+1. Under **Verify a RepoWrangler bundle**, leave **Latest stable
+   (recommended)** selected, choose the deployment target, and let Ranch Hand
+   populate the newest compatible RepoWrangler version. Use **Latest
+   prerelease** or **Specific version (advanced)** only intentionally. Choose
+   **Verify and cache release** and continue only when provenance, SBOM, size,
+   and SHA-256 all report verified.
 2. Under **Describe the target environment**, enter the requested non-secret
    target values and choose **Create bound plan**. Credentials do not enter the
    exported plan.

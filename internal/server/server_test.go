@@ -51,6 +51,29 @@ type fakeInstallationReader struct {
 	err     error
 }
 
+type fakeRollbackPool struct {
+	entries    []adapter.RollbackPoolEntry
+	keepLatest int
+}
+
+func (f *fakeRollbackPool) RollbackPool(context.Context, plan.DeploymentPlan, []lifecycle.BackupRecord) ([]adapter.RollbackPoolEntry, error) {
+	return f.entries, nil
+}
+
+func (f *fakeRollbackPool) PruneRollbackPool(_ context.Context, _ plan.DeploymentPlan, _ []lifecycle.BackupRecord, keepLatest int) (adapter.RollbackPruneResult, error) {
+	f.keepLatest = keepLatest
+	return adapter.RollbackPruneResult{Kept: f.entries}, nil
+}
+
+func (f *fakeInstallationReader) Installation(deploymentID string) (lifecycle.InstallationRecord, error) {
+	for _, record := range f.records {
+		if record.DeploymentID == deploymentID {
+			return record, f.err
+		}
+	}
+	return lifecycle.InstallationRecord{}, os.ErrNotExist
+}
+
 func (f *fakeInstallationReader) Installations() ([]lifecycle.InstallationRecord, error) {
 	return f.records, f.err
 }
@@ -101,7 +124,7 @@ func TestCreateExportPreflightAndDryRunVerifiedPlan(t *testing.T) {
 	targets := &fakeTargetPreflighter{}
 	stager := &fakeBundleStager{}
 	runner := &fakeOperationRunner{}
-	h := newWithServices("secret-token", "test", testUI(), verifier, targets, stager, runner, nil)
+	h := newWithServices("secret-token", "test", testUI(), verifier, targets, stager, runner, nil, nil)
 	manifest := "https://github.com/WranglerLabs/repo-wrangler/releases/download/v1.2.3/release-manifest.json"
 	verifyBody := `{"manifestUrl":"` + manifest + `","version":"v1.2.3","target":"local-compose"}`
 	response := authorizedPost(h, "/api/v1/releases/verify", verifyBody)
@@ -210,7 +233,7 @@ func TestListsInstallationRecords(t *testing.T) {
 		DeploymentID: "0123456789abcdef01234567", OperationID: strings.Repeat("d", 32), Kind: lifecycle.Update,
 		Target: "local-compose", FromVersion: "v1.2.2", ToVersion: "v1.2.3", Phase: lifecycle.Staged,
 	}}}
-	h := newWithServices("secret-token", "test", testUI(), nil, nil, nil, nil, reader)
+	h := newWithServices("secret-token", "test", testUI(), nil, nil, nil, nil, reader, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/installations", nil)
 	request.Header.Set("Authorization", "Bearer secret-token")
 	response := httptest.NewRecorder()
@@ -239,6 +262,40 @@ func TestListsInstallationRecords(t *testing.T) {
 	h.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"phase":"staged"`) {
 		t.Fatalf("active operation inventory returned %d: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestListsAndExplicitlyPrunesLocalRollbackPool(t *testing.T) {
+	candidate := plan.DeploymentPlan{
+		SchemaVersion: plan.CurrentSchemaVersion, Name: "Local Wrangler",
+		Release: plan.ReleaseSelection{Version: "v1.2.3", ManifestURL: "https://github.com/WranglerLabs/repo-wrangler/releases/download/v1.2.3/release-manifest.json", ManifestSHA256: strings.Repeat("a", 64), ArtifactSHA256: strings.Repeat("b", 64), ArtifactSize: 42},
+		Target:  plan.Target{Kind: "local-compose"}, Configuration: map[string]string{"projectName": "repo-wrangler", "dataVolume": "repo-wrangler-data", "listenAddress": "127.0.0.1:8080"},
+	}
+	encoded, err := plan.CanonicalJSON(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deploymentID, err := lifecycle.DeploymentID(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &fakeInstallationReader{records: []lifecycle.InstallationRecord{{DeploymentID: deploymentID, Target: "local-compose", State: lifecycle.InstallationActive, Version: "v1.2.3", Plan: encoded}}}
+	pool := &fakeRollbackPool{entries: []adapter.RollbackPoolEntry{{BackupID: strings.Repeat("c", 32), Version: "v1.2.2"}}}
+	h := newWithServices("secret-token", "test", testUI(), nil, nil, nil, nil, reader, pool)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/installations/"+deploymentID+"/rollback-pool", nil)
+	request.Header.Set("Authorization", "Bearer secret-token")
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"version":"v1.2.2"`) {
+		t.Fatalf("rollback pool inventory returned %d: %s", response.Code, response.Body.String())
+	}
+	response = authorizedPost(h, "/api/v1/installations/"+deploymentID+"/rollback-pool/prune", `{"keepLatest":1,"confirmed":true}`)
+	if response.Code != http.StatusOK || pool.keepLatest != 1 {
+		t.Fatalf("rollback pool prune returned %d: %s", response.Code, response.Body.String())
+	}
+	response = authorizedPost(h, "/api/v1/installations/"+deploymentID+"/rollback-pool/prune", `{"keepLatest":0,"confirmed":false}`)
+	if response.Code != http.StatusBadRequest || pool.keepLatest != 1 {
+		t.Fatalf("unconfirmed rollback prune was accepted: %d %s", response.Code, response.Body.String())
 	}
 }
 

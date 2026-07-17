@@ -6,10 +6,12 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -48,10 +50,16 @@ type operationRunner interface {
 }
 
 type installationReader interface {
+	Installation(string) (lifecycle.InstallationRecord, error)
 	Installations() ([]lifecycle.InstallationRecord, error)
 	Backups(string) ([]lifecycle.BackupRecord, error)
 	Active(string) (lifecycle.Journal, error)
 	ActiveOperations() ([]lifecycle.Journal, error)
+}
+
+type rollbackPoolManager interface {
+	RollbackPool(context.Context, plan.DeploymentPlan, []lifecycle.BackupRecord) ([]adapter.RollbackPoolEntry, error)
+	PruneRollbackPool(context.Context, plan.DeploymentPlan, []lifecycle.BackupRecord, int) (adapter.RollbackPruneResult, error)
 }
 
 type Server struct {
@@ -65,6 +73,7 @@ type Server struct {
 	stager          bundleStager
 	coordinator     operationRunner
 	installations   installationReader
+	rollbackPool    rollbackPoolManager
 	readyMu         sync.RWMutex
 	readyPlans      map[string]bool
 }
@@ -75,6 +84,7 @@ func New(token, version string, ui fs.FS) http.Handler {
 		verifier = nil
 	}
 	targets := adapter.NewRegistry()
+	localDocker := adapter.NewLocalDocker()
 	stager, stageErr := bundle.NewStager("")
 	store, storeErr := lifecycle.NewStore("")
 	var coordinator operationRunner
@@ -83,13 +93,12 @@ func New(token, version string, ui fs.FS) http.Handler {
 		installations = store
 	}
 	if stageErr == nil && storeErr == nil {
-		localDocker := adapter.NewLocalDocker()
 		coordinator, _ = operations.NewCoordinator(store, stager, operations.NewRegistry(map[string]operations.Mutator{
 			"local-compose": localDocker, "azure-container-apps": adapter.NewAzureContainerApps(),
 			"cloudflare": adapter.NewCloudflare(), "remote-linux-compose": adapter.NewRemoteLinuxCompose(),
 		}))
 	}
-	return newWithServices(token, version, ui, verifier, targets, stager, coordinator, installations)
+	return newWithServices(token, version, ui, verifier, targets, stager, coordinator, installations, localDocker)
 }
 
 func NewWithReleaseVerifier(token, version string, ui fs.FS, verifier releaseVerifier) http.Handler {
@@ -98,11 +107,11 @@ func NewWithReleaseVerifier(token, version string, ui fs.FS, verifier releaseVer
 
 func NewWithDependencies(token, version string, ui fs.FS, verifier releaseVerifier, targets targetPreflighter) http.Handler {
 	stager, _ := bundle.NewStager("")
-	return newWithServices(token, version, ui, verifier, targets, stager, nil, nil)
+	return newWithServices(token, version, ui, verifier, targets, stager, nil, nil, nil)
 }
 
-func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, targets targetPreflighter, stager bundleStager, coordinator operationRunner, installations installationReader) http.Handler {
-	s := &Server{token: token, version: version, ui: ui, releaseVerifier: verifier, verified: make(map[string]productrelease.VerifiedArtifact), targets: targets, stager: stager, coordinator: coordinator, installations: installations, readyPlans: make(map[string]bool)}
+func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, targets targetPreflighter, stager bundleStager, coordinator operationRunner, installations installationReader, rollbackPool rollbackPoolManager) http.Handler {
+	s := &Server{token: token, version: version, ui: ui, releaseVerifier: verifier, verified: make(map[string]productrelease.VerifiedArtifact), targets: targets, stager: stager, coordinator: coordinator, installations: installations, rollbackPool: rollbackPool, readyPlans: make(map[string]bool)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", s.live)
 	mux.Handle("GET /api/v1/status", s.authorize(http.HandlerFunc(s.status)))
@@ -118,6 +127,8 @@ func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, 
 	mux.Handle("POST /api/v1/operations/{deploymentID}/recover", s.authorize(http.HandlerFunc(s.recoverActiveOperation)))
 	mux.Handle("GET /api/v1/installations", s.authorize(http.HandlerFunc(s.listInstallations)))
 	mux.Handle("GET /api/v1/installations/{deploymentID}/backups", s.authorize(http.HandlerFunc(s.listBackups)))
+	mux.Handle("GET /api/v1/installations/{deploymentID}/rollback-pool", s.authorize(http.HandlerFunc(s.listRollbackPool)))
+	mux.Handle("POST /api/v1/installations/{deploymentID}/rollback-pool/prune", s.authorize(http.HandlerFunc(s.pruneRollbackPool)))
 	mux.Handle("GET /api/v1/diagnostics", s.authorize(http.HandlerFunc(s.exportDiagnostics)))
 	mux.Handle("POST /api/v1/releases/verify", s.authorize(http.HandlerFunc(s.verifyRelease)))
 	mux.Handle("/", s.spa())
@@ -207,6 +218,79 @@ func (s *Server) listBackups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"backups": records})
+}
+
+func (s *Server) rollbackPoolInputs(deploymentID string) (plan.DeploymentPlan, []lifecycle.BackupRecord, error) {
+	if s.installations == nil || s.rollbackPool == nil {
+		return plan.DeploymentPlan{}, nil, errors.New("local rollback retention is unavailable")
+	}
+	record, err := s.installations.Installation(deploymentID)
+	if err != nil {
+		return plan.DeploymentPlan{}, nil, err
+	}
+	if record.State != lifecycle.InstallationActive || record.Target != "local-compose" {
+		return plan.DeploymentPlan{}, nil, errors.New("rollback retention requires an active local Docker installation")
+	}
+	candidate, err := plan.DecodeAndValidate(record.Plan)
+	if err != nil {
+		return plan.DeploymentPlan{}, nil, errors.New("recorded local deployment plan is invalid")
+	}
+	backups, err := s.installations.Backups(deploymentID)
+	return candidate, backups, err
+}
+
+func (s *Server) listRollbackPool(w http.ResponseWriter, r *http.Request) {
+	candidate, backups, err := s.rollbackPoolInputs(r.PathValue("deploymentID"))
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	entries, err := s.rollbackPool.RollbackPool(r.Context(), candidate, backups)
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
+}
+
+func (s *Server) pruneRollbackPool(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request rejected"})
+		return
+	}
+	var request struct {
+		KeepLatest int  `json:"keepLatest"`
+		Confirmed  bool `json:"confirmed"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxReleaseRequestSize))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF || !request.Confirmed {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rollback pruning requires an explicit confirmed retention request"})
+		return
+	}
+	deploymentID := r.PathValue("deploymentID")
+	if s.installations == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "local rollback retention is unavailable"})
+		return
+	}
+	if _, err := s.installations.Active(deploymentID); err == nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "rollback pruning is blocked while a lifecycle operation is active"})
+		return
+	} else if !errors.Is(err, os.ErrNotExist) {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "active operation state could not be verified"})
+		return
+	}
+	candidate, backups, err := s.rollbackPoolInputs(deploymentID)
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	result, err := s.rollbackPool.PruneRollbackPool(r.Context(), candidate, backups, request.KeepLatest)
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": err.Error(), "result": result})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"completed": true, "result": result})
 }
 
 func (s *Server) listInstallations(w http.ResponseWriter, _ *http.Request) {

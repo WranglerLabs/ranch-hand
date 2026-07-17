@@ -46,7 +46,7 @@ Explicit local restore and rollback use the authenticated installation/backup in
 
 Local repair is also backup-first and same-version. It creates a new consistent archive of the recorded current release, rebuilds that exact verified release and data in a new owned volume, and preserves the original container and volume until the replacement passes health.
 
-Rollback-pool retention controls and production credential configuration for this target are not enabled yet. Manual clone/fork and custom automation remain supported RepoWrangler deployment options.
+The Windows interface inventories stopped local rollback environments and can explicitly retain the newest zero through ten entries. Pruning is blocked during an active lifecycle operation and re-verifies the backup identity, stopped state, deployment/version labels, and data-volume ownership immediately before deleting each container and volume without force. Backup archives and inventory records are retained. See [ADR-0010](docs/adr/0010-local-rollback-pool-retention.md). Production credential configuration for this target is not enabled yet. Manual clone/fork and custom automation remain supported RepoWrangler deployment options.
 
 ## Azure Container Apps evaluation install
 

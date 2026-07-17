@@ -1,16 +1,27 @@
 # Changelog
 
-All notable Ranch Hand changes will be recorded here. The project uses semantic versions; release candidates are not generally available releases.
+All notable Ranch Hand changes will be recorded here. The project uses semantic
+versions. Public Preview releases are publicly downloadable but are not
+generally available or production-supported releases.
 
 ## Unreleased
 
 ### Documentation
 
+- Classified `v0.1.0-rc.1` as the first Ranch Hand Public Preview and made it the
+  primary recommended Windows deployment path for RepoWrangler.
+- Published the complete GA promotion contract covering signed distribution,
+  RepoWrangler compatibility, production configuration and lifecycle parity,
+  uninstall/data retention, application upgrades, real-target UAT,
+  accessibility, security, documentation, and best-effort support.
 - Added a task-oriented Windows operator guide covering acquisition, verification,
   launch, target prerequisites, the guided workflow, lifecycle operations, local
   state, diagnostics, and the manual RepoWrangler deployment alternative.
 
 ## [0.1.0-rc.1] - 2026-07-17
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
 
 ### Added
 

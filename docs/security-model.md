@@ -24,7 +24,7 @@ SHA-256 mismatches, incompatible contracts, invalid SPDX metadata, and provenanc
 that does not identify the allowed RepoWrangler release workflow and subject.
 Cached and staged files are rehashed before reuse.
 
-The current Ranch Hand RC itself is unsigned. Its GitHub provenance and SHA-256
+The current Ranch Hand Public Preview itself is unsigned. Its GitHub provenance and SHA-256
 can identify the build, but they do not provide Authenticode publisher identity or
 SmartScreen reputation. See the [operator guide](operator-guide.md).
 

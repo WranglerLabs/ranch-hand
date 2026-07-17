@@ -2,7 +2,13 @@
 
 Ranch Hand is community-maintained open-source software. Support is best-effort and there is no guaranteed response or resolution time.
 
-Unsigned release candidates are provided for evaluation and validation only. They are not Authenticode-signed, do not receive a production support commitment, and may be removed when their workflow-artifact retention period expires.
+Public Preview releases are provided for evaluation and feedback. They are not
+Authenticode-signed and carry no production, response-time, compatibility, or
+upgrade commitment. Stable prerelease downloads remain available until they are
+superseded or withdrawn for a documented security or safety reason.
+
+See the [GA readiness contract](docs/ga-readiness.md) for the work required
+before the support status can change.
 
 - Use GitHub Discussions for usage and design questions when enabled.
 - Use GitHub Issues for reproducible defects and feature requests.

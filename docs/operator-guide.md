@@ -1,6 +1,6 @@
 # Ranch Hand Windows operator guide
 
-Ranch Hand is the optional, clone-free way to deploy and manage verified
+Ranch Hand Public Preview is the primary, clone-free Windows path to deploy and manage verified
 RepoWrangler releases from Windows. You do not need the RepoWrangler source
 repository, Git, Node.js, Go, WSL, Azure CLI, Wrangler CLI, Docker CLI, or a local
 OpenSSH executable for Ranch Hand's normal workflow.
@@ -11,15 +11,15 @@ its [manual deployment recipes](https://github.com/WranglerLabs/repo-wrangler/tr
 
 ## Current availability
 
-There is no signed public Ranch Hand installer yet. `v0.1.0-rc.1` is an unsigned
-evaluation candidate published as a stable prerelease download. It is not a
-generally available or production release.
+There is no signed GA Ranch Hand installer yet. `v0.1.0-rc.1` is an unsigned
+Public Preview published as a stable prerelease download. It is intended for
+evaluation and feedback, not production support.
 
 Use it only on an explicitly authorized evaluation target. Windows SmartScreen or
 organizational application-control policy may warn or block it. Do not bypass an
 organizational security policy.
 
-## Download and verify the evaluation candidate
+## Download and verify the Public Preview
 
 1. Open the public [Ranch Hand for Windows guide](https://wranglerlabs.org/ranch-hand)
    and select **Download Ranch Hand v0.1.0-rc.1 for Windows (64-bit)**. A GitHub

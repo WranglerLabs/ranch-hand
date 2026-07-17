@@ -1,6 +1,7 @@
 # Unsigned release-candidate policy
 
-Ranch Hand `v0.1.0-rc.1` is an evaluation artifact, not a generally available release.
+Ranch Hand `v0.1.0-rc.1` is the first **Public Preview**. It is an evaluation
+artifact, not a generally available or production-supported release.
 
 ## Build and distribution boundary
 
@@ -27,8 +28,12 @@ release.
 
 The executable is not Authenticode-signed. Windows SmartScreen, reputation checks, or enterprise application-control policy can warn, quarantine, or block it. An evaluator should verify the SHA-256 and GitHub provenance attestation before running it and should use only disposable or explicitly authorized evaluation targets.
 
-No paid support, response time, compatibility guarantee, or upgrade guarantee applies to an unsigned candidate. Diagnostics remain redacted, and security reports should use the repository's private vulnerability-reporting channel.
+No paid support, response time, compatibility guarantee, or upgrade guarantee applies to the unsigned Public Preview. Diagnostics remain redacted, and security reports should use the repository's private vulnerability-reporting channel.
 
-## Promotion gate
+## GA promotion gate
 
-A generally available Ranch Hand release requires a separately reviewed workflow that applies an approved Windows Authenticode signature, verifies that signature on the final bytes, preserves the SBOM and provenance evidence, passes clean-Windows and target UAT, and publishes immutable GitHub Release assets. Creating or running that workflow requires explicit maintainer authorization after signing identity setup is complete.
+A generally available Ranch Hand release requires the complete
+[GA readiness contract](ga-readiness.md), including a separately reviewed
+workflow that applies an approved Windows Authenticode signature, verifies that
+signature on the final bytes, preserves the SBOM and provenance evidence, passes
+clean-Windows and real-target UAT, and publishes immutable release assets.

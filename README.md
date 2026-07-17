@@ -51,6 +51,12 @@ Before an adapter can consume a release, Ranch Hand rehashes the cached archive 
 
 The staging record contains the size and SHA-256 of every extracted file. Ranch Hand rehashes all staged files before reuse and rebuilds a staging directory from the verified archive if any file is missing, added, or changed. A staged directory is local execution material only; its path is never written into the portable deployment plan.
 
+## Lifecycle transaction policy
+
+Lifecycle mutations use a durable, secret-free journal keyed to the stable target environment. The journal permits one active operation per deployment, embeds the canonical plan snapshot, replaces every phase atomically, and detects corrupted phase history. An update cannot commit until backup, staging, apply, and health verification have all completed. If activation or verification fails, recovery is an explicit journaled path rather than an undocumented retry.
+
+The journal coordinator is implemented and tested; target apply methods are not wired yet. See [ADR-0002](docs/adr/0002-durable-lifecycle-transactions.md) for phase rules, recovery semantics, and trade-offs.
+
 ## Build from source
 
 Building is for contributors; ordinary operators will download a signed executable from a Ranch Hand release.

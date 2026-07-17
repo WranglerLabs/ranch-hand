@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/WranglerLabs/ranch-hand/internal/plan"
@@ -30,6 +31,8 @@ type Server struct {
 	version         string
 	ui              fs.FS
 	releaseVerifier releaseVerifier
+	verifiedMu      sync.RWMutex
+	verified        map[string]productrelease.VerifiedArtifact
 }
 
 func New(token, version string, ui fs.FS) http.Handler {
@@ -41,11 +44,15 @@ func New(token, version string, ui fs.FS) http.Handler {
 }
 
 func NewWithReleaseVerifier(token, version string, ui fs.FS, verifier releaseVerifier) http.Handler {
-	s := &Server{token: token, version: version, ui: ui, releaseVerifier: verifier}
+	s := &Server{token: token, version: version, ui: ui, releaseVerifier: verifier, verified: make(map[string]productrelease.VerifiedArtifact)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", s.live)
 	mux.Handle("GET /api/v1/status", s.authorize(http.HandlerFunc(s.status)))
 	mux.Handle("POST /api/v1/plans/validate", s.authorize(http.HandlerFunc(s.validatePlan)))
+	mux.Handle("POST /api/v1/plans/create", s.authorize(http.HandlerFunc(s.createPlan)))
+	mux.Handle("POST /api/v1/plans/export", s.authorize(http.HandlerFunc(s.exportPlan)))
+	mux.Handle("POST /api/v1/plans/preflight", s.authorize(http.HandlerFunc(s.preflightPlan)))
+	mux.Handle("POST /api/v1/plans/dry-run", s.authorize(http.HandlerFunc(s.dryRunPlan)))
 	mux.Handle("POST /api/v1/releases/verify", s.authorize(http.HandlerFunc(s.verifyRelease)))
 	mux.Handle("/", s.spa())
 	return s.securityHeaders(mux)
@@ -79,6 +86,101 @@ func (s *Server) validatePlan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"valid": true, "plan": candidate})
 }
 
+func (s *Server) createPlan(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request rejected"})
+		return
+	}
+	var request plan.CreateRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPlanSize))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid plan creation request"})
+		return
+	}
+	verified, ok := s.lookupVerified(request.Version, request.Target)
+	if !ok {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "verify this exact release and target during the current Ranch Hand session before creating its plan"})
+		return
+	}
+	candidate, err := plan.Create(request, plan.VerifiedRelease{
+		ManifestURL: verified.ManifestURL, ManifestSHA256: verified.ManifestSHA256,
+		ArtifactSHA256: verified.SHA256, ArtifactSize: verified.Size,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	canonical, err := plan.CanonicalJSON(candidate)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"created": true, "plan": candidate, "canonicalJson": string(canonical)})
+}
+
+func (s *Server) exportPlan(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request rejected"})
+		return
+	}
+	candidate, ok := readPlan(w, r)
+	if !ok {
+		return
+	}
+	if _, found := s.verifiedPlan(candidate); !found {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "the plan does not match a release verified during the current Ranch Hand session"})
+		return
+	}
+	contents, err := plan.CanonicalJSON(candidate)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", `attachment; filename="ranch-hand-deployment-plan.json"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(contents)
+}
+
+func (s *Server) preflightPlan(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request rejected"})
+		return
+	}
+	candidate, ok := readPlan(w, r)
+	if !ok {
+		return
+	}
+	verified, found := s.verifiedPlan(candidate)
+	if !found {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "the plan does not match a release verified during the current Ranch Hand session"})
+		return
+	}
+	writeJSON(w, http.StatusOK, plan.Preflight(candidate, verified.CachePath))
+}
+
+func (s *Server) dryRunPlan(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request rejected"})
+		return
+	}
+	candidate, ok := readPlan(w, r)
+	if !ok {
+		return
+	}
+	if _, found := s.verifiedPlan(candidate); !found {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "the plan does not match a release verified during the current Ranch Hand session"})
+		return
+	}
+	report, err := plan.DryRun(candidate)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
 func (s *Server) verifyRelease(w http.ResponseWriter, r *http.Request) {
 	if !sameOrigin(r) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request rejected"})
@@ -104,7 +206,44 @@ func (s *Server) verifyRelease(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 		return
 	}
+	if verified.ProvenanceVerified && verified.SBOMVerified {
+		s.verifiedMu.Lock()
+		s.verified[verifiedKey(verified.Version, verified.Target)] = verified
+		s.verifiedMu.Unlock()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"verified": true, "artifact": verified})
+}
+
+func readPlan(w http.ResponseWriter, r *http.Request) (plan.DeploymentPlan, bool) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxPlanSize))
+	if err != nil {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "deployment plan exceeds 1 MiB"})
+		return plan.DeploymentPlan{}, false
+	}
+	candidate, err := plan.DecodeAndValidate(body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return plan.DeploymentPlan{}, false
+	}
+	return candidate, true
+}
+
+func verifiedKey(version, target string) string { return version + "\x00" + target }
+
+func (s *Server) lookupVerified(version, target string) (productrelease.VerifiedArtifact, bool) {
+	s.verifiedMu.RLock()
+	defer s.verifiedMu.RUnlock()
+	verified, ok := s.verified[verifiedKey(version, target)]
+	return verified, ok
+}
+
+func (s *Server) verifiedPlan(candidate plan.DeploymentPlan) (productrelease.VerifiedArtifact, bool) {
+	verified, ok := s.lookupVerified(candidate.Release.Version, candidate.Target.Kind)
+	if !ok || verified.ManifestURL != candidate.Release.ManifestURL || !strings.EqualFold(verified.ManifestSHA256, candidate.Release.ManifestSHA256) ||
+		!strings.EqualFold(verified.SHA256, candidate.Release.ArtifactSHA256) || verified.Size != candidate.Release.ArtifactSize {
+		return productrelease.VerifiedArtifact{}, false
+	}
+	return verified, true
 }
 
 func (s *Server) authorize(next http.Handler) http.Handler {

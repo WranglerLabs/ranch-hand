@@ -2,7 +2,7 @@
 
 Ranch Hand is the standalone, Windows-first lifecycle manager for [RepoWrangler](https://github.com/WranglerLabs/repo-wrangler). It is for operators who want to install and manage RepoWrangler without cloning or forking its source repository. Contributors and advanced operators can still use RepoWrangler's documented deployment recipes directly.
 
-> **Status:** early implementation. The secure local application shell, versioned contract validation, and immutable release bundle verification/cache are working. Deployment adapters do not apply infrastructure yet and this repository is not a production installer release.
+> **Status:** active implementation. The secure local application shell, immutable release verification/cache, secret-free plan creation/export, artifact preflight, and non-mutating dry run are working. Deployment adapters do not apply infrastructure yet and this repository is not a production installer release.
 
 ## First release scope
 
@@ -25,6 +25,12 @@ Plans must never contain passwords, tokens, private keys, client secrets, or pro
 The local interface accepts an explicit RepoWrangler version and deployment target. Ranch Hand retrieves the official versioned manifest and target bundle over HTTPS, restricts redirects to the trusted GitHub release infrastructure, enforces response-size limits, verifies the declared byte count and SHA-256, and atomically stores the verified bundle in the user's versioned application cache. A matching cached file is hashed again before reuse; partial or mismatched downloads are removed.
 
 Ranch Hand also downloads the release's SPDX SBOM and Sigstore provenance bundle. It verifies the Sigstore trust root through TUF, the certificate and transparency-log evidence, the exact RepoWrangler release-workflow identity, the SLSA provenance predicate, and both the deployment bundle and SBOM digests before classifying the release as verified. This verification is built into Ranch Hand and does not require a GitHub account, GitHub CLI, or Cosign installation.
+
+## Deployment plans and dry run
+
+After a release is verified, the local interface creates a canonical JSON deployment plan for that exact release and target. The plan records the manifest digest, deployment-artifact digest, artifact size, target kind, and a target-specific allowlist of non-secret configuration. Unknown fields and credential-like keys are rejected. Export is permitted only when the plan still matches an artifact verified during the current Ranch Hand session.
+
+Preflight revalidates the plan and rehashes the cached artifact before reporting it ready. Dry run describes the native target operations in order and reports `mutated: false`; it does not authenticate, contact the target control plane, or change infrastructure. Live control-plane checks and apply operations belong to the deployment-adapter implementation.
 
 ## Build from source
 

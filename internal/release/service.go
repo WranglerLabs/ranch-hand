@@ -60,6 +60,8 @@ type VerifiedArtifact struct {
 	SBOMPath           string `json:"sbomPath"`
 	ProvenanceVerified bool   `json:"provenanceVerified"`
 	SBOMVerified       bool   `json:"sbomVerified"`
+	ManifestURL        string `json:"manifestUrl"`
+	ManifestSHA256     string `json:"manifestSha256"`
 }
 
 type Service struct {
@@ -182,6 +184,7 @@ func (s *Service) VerifyAndCache(ctx context.Context, request Request) (Verified
 		AttestationURL: artifact.AttestationURL, SBOMURL: artifact.SBOMURL,
 		CachePath: cachePath, CacheHit: cacheHit, ProvenancePath: provenancePath, SBOMPath: sbomPath,
 		ProvenanceVerified: true, SBOMVerified: true,
+		ManifestURL: manifestURL.String(), ManifestSHA256: hex.EncodeToString(manifestDigest[:]),
 	}, nil
 }
 

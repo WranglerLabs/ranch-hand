@@ -1,4 +1,4 @@
-# ADR-0007: Backup-First Local Restore and Rollback
+# ADR-0007: Backup-First Local Restore, Rollback, and Repair
 
 - Status: Accepted
 - Date: 2026-07-17
@@ -18,6 +18,8 @@ Local Docker restore and rollback are explicit coordinator operations with two i
 
 The selected backup ID is part of the journal header and therefore part of the first event hash. The fresh safety backup is bound by the later `backup-complete` event. A resumed operation can prove both roles without relying on browser state.
 
+Repair is a same-version reconstruction from the fresh safety backup itself. It has no selected historical input: the verified current-release artifact and newly created archive seed a new owned volume, while the original stopped container and untouched volume remain the automatic recovery point.
+
 Restore requires the selected backup, current installation record, and verified target artifact to have the same immutable version. Rollback requires the selected backup and verified target artifact to have the same prior version, different from the currently recorded version. Both operations reject a backup from another deployment or target.
 
 Apply pulls the exact digest-pinned target image, creates a new ownership-labeled volume keyed to the fresh safety-backup identity, restores the selected archive into that new volume, preserves the current stopped container and its untouched volume under a deterministic safety identity, and activates the replacement. Readiness and `/health/live` must report the exact target version before commit.
@@ -28,7 +30,7 @@ The Windows interface reads installation and backup inventories from the authent
 
 ## Consequences
 
-- Restore and rollback are backup-first and copy-on-write.
+- Restore, rollback, and repair are backup-first and copy-on-write.
 - A failed same-version restore cannot be mistaken for the original container based only on version labels.
 - The original container and volume remain available after a successful operation until explicit rollback-pool retention is implemented.
 - Each operation creates additional archive and Docker volume storage; the interface must make this clear and later expose selective retention controls.

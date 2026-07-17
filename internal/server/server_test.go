@@ -165,6 +165,11 @@ func TestCreateExportPreflightAndDryRunVerifiedPlan(t *testing.T) {
 	if response.Code != http.StatusOK || runner.request.Kind != lifecycle.Restore || runner.request.BackupID != restoreID {
 		t.Fatalf("restore operation was not routed to the coordinator: %d %s", response.Code, response.Body.String())
 	}
+	repairBody := `{"kind":"repair","fromVersion":"v1.2.3","plan":` + string(created.Plan) + `,"credentials":{}}`
+	response = authorizedPost(h, "/api/v1/operations/run", repairBody)
+	if response.Code != http.StatusOK || runner.request.Kind != lifecycle.Repair {
+		t.Fatalf("repair operation was not routed to the coordinator: %d %s", response.Code, response.Body.String())
+	}
 }
 
 func authorizedPost(h http.Handler, path, body string) *httptest.ResponseRecorder {

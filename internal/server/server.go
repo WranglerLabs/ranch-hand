@@ -166,7 +166,7 @@ func (s *Server) runOperation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer request.Credentials.Clear()
-	localOperation := request.Plan.Target.Kind == "local-compose" && (request.Kind == lifecycle.Install || request.Kind == lifecycle.Backup || request.Kind == lifecycle.Update || request.Kind == lifecycle.Restore || request.Kind == lifecycle.Rollback)
+	localOperation := request.Plan.Target.Kind == "local-compose" && (request.Kind == lifecycle.Install || request.Kind == lifecycle.Backup || request.Kind == lifecycle.Update || request.Kind == lifecycle.Restore || request.Kind == lifecycle.Rollback || request.Kind == lifecycle.Repair)
 	azureOperation := request.Plan.Target.Kind == "azure-container-apps" && request.Kind == lifecycle.Install
 	cloudflareOperation := request.Plan.Target.Kind == "cloudflare" && request.Kind == lifecycle.Install
 	remoteOperation := request.Plan.Target.Kind == "remote-linux-compose" && request.Kind == lifecycle.Install
@@ -192,6 +192,10 @@ func (s *Server) runOperation(w http.ResponseWriter, r *http.Request) {
 	}
 	if request.Kind == lifecycle.Rollback && (request.BackupID == "" || request.FromVersion == "" || request.FromVersion == request.Plan.Release.Version) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "local rollback requires a selected backup for a different explicit immutable release"})
+		return
+	}
+	if request.Kind == lifecycle.Repair && (request.FromVersion == "" || request.FromVersion != request.Plan.Release.Version) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "local repair requires the currently installed immutable release"})
 		return
 	}
 	if request.Kind != lifecycle.Restore && request.Kind != lifecycle.Rollback && request.BackupID != "" {

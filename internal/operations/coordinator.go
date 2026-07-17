@@ -90,7 +90,7 @@ func (c *Coordinator) Run(ctx context.Context, request Request) (Result, error) 
 	if err := request.Plan.Validate(); err != nil {
 		return Result{}, err
 	}
-	if request.Kind != lifecycle.Install && request.Kind != lifecycle.Update && request.Kind != lifecycle.Backup && request.Kind != lifecycle.Restore && request.Kind != lifecycle.Rollback {
+	if request.Kind != lifecycle.Install && request.Kind != lifecycle.Update && request.Kind != lifecycle.Backup && request.Kind != lifecycle.Restore && request.Kind != lifecycle.Rollback && request.Kind != lifecycle.Repair {
 		return Result{}, fmt.Errorf("%s coordinator is not implemented yet", request.Kind)
 	}
 	if request.Kind != lifecycle.Backup {
@@ -129,7 +129,7 @@ func (c *Coordinator) Run(ctx context.Context, request Request) (Result, error) 
 	}
 	result.Journal = journal
 
-	if request.Kind == lifecycle.Update || request.Kind == lifecycle.Backup || request.Kind == lifecycle.Restore || request.Kind == lifecycle.Rollback {
+	if request.Kind == lifecycle.Update || request.Kind == lifecycle.Backup || request.Kind == lifecycle.Restore || request.Kind == lifecycle.Rollback || request.Kind == lifecycle.Repair {
 		artifact, backupErr := mutator.Backup(ctx, request.Plan, request.FromVersion, request.Credentials)
 		if backupErr != nil {
 			if failed, transitionErr := c.store.Transition(journal.DeploymentID, journal.OperationID, lifecycle.Failed); transitionErr == nil {

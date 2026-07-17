@@ -236,6 +236,23 @@ func TestRollbackUsesPriorBackupAndProtectsCurrentVersion(t *testing.T) {
 	}
 }
 
+func TestRepairUsesFreshSafetyBackupAtCurrentVersion(t *testing.T) {
+	mutator, staged := &fakeMutator{}, &fakeStager{}
+	coordinator := coordinatorForTest(t, mutator, staged)
+	seedInstalledVersion(t, coordinator, mutator, staged, "v1.2.3")
+	candidate := operationPlan("v1.2.3")
+	result, err := coordinator.Run(context.Background(), Request{
+		Kind: lifecycle.Repair, Plan: candidate, FromVersion: "v1.2.3", Artifact: operationArtifact(candidate),
+	})
+	if err != nil || result.Journal.Phase != lifecycle.Committed || result.Backup == nil {
+		t.Fatalf("repair failed: %+v, %v", result, err)
+	}
+	if strings.Join(mutator.calls, ",") != "backup,apply,verify" || mutator.appliedBackups.Selected != nil ||
+		mutator.appliedBackups.Safety == nil || mutator.appliedBackups.Safety.BackupID != result.Backup.BackupID || result.Journal.InputBackupID != "" {
+		t.Fatalf("repair did not use only its fresh safety backup: calls=%v backups=%+v", mutator.calls, mutator.appliedBackups)
+	}
+}
+
 func TestAppliedJournalFailureTriggersRecovery(t *testing.T) {
 	base, err := lifecycle.NewStore(filepath.Join(t.TempDir(), "state"))
 	if err != nil {

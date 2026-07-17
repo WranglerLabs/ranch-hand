@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/WranglerLabs/ranch-hand/internal/bundle"
@@ -31,9 +32,10 @@ const (
 )
 
 var dockerProjectPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+var localBackupLocatorPattern = regexp.MustCompile(`^backups/[a-f0-9]{32}\.tar$`)
 
 func (d *LocalDocker) Backup(ctx context.Context, candidate plan.DeploymentPlan, _ Credentials) (artifact lifecycle.BackupArtifact, operationErr error) {
-	project, dataVolume, _, _, err := localDockerInputs(candidate)
+	project, _, _, _, err := localDockerInputs(candidate)
 	if err != nil {
 		return artifact, err
 	}
@@ -51,7 +53,13 @@ func (d *LocalDocker) Backup(ctx context.Context, candidate plan.DeploymentPlan,
 	if err := verifyOwnership(metadata.Labels, deploymentID, "container"); err != nil {
 		return artifact, err
 	}
-	if err := d.verifyManagedVolume(ctx, dataVolume, deploymentID); err != nil {
+	if metadata.Labels["com.wranglerlabs.ranch-hand.version"] != candidate.Release.Version {
+		return artifact, errors.New("the managed container version does not match the backup plan")
+	}
+	if metadata.DataVolume == "" {
+		return artifact, errors.New("the managed RepoWrangler container has no persistent /app/data volume")
+	}
+	if err := d.verifyManagedVolume(ctx, metadata.DataVolume, deploymentID); err != nil {
 		return artifact, err
 	}
 	if metadata.Running {
@@ -73,10 +81,7 @@ func (d *LocalDocker) Backup(ctx context.Context, candidate plan.DeploymentPlan,
 	return d.archiveContainerData(ctx, metadata.ID)
 }
 
-func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, staged bundle.StagedBundle, _ Credentials) error {
-	if kind != lifecycle.Install {
-		return fmt.Errorf("local Docker %s is not implemented", kind)
-	}
+func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, staged bundle.StagedBundle, backup *lifecycle.BackupRecord, _ Credentials) error {
 	project, dataVolume, hostIP, hostPort, err := localDockerInputs(candidate)
 	if err != nil {
 		return err
@@ -87,6 +92,16 @@ func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, c
 	}
 	if staged.Target != "local-compose" {
 		return errors.New("local Docker adapter requires a local-compose bundle")
+	}
+	deploymentID, err := lifecycle.DeploymentID(candidate)
+	if err != nil {
+		return err
+	}
+	if kind == lifecycle.Update {
+		return d.applyUpdate(ctx, candidate, backup, identity.Image, deploymentID, project, hostIP, hostPort)
+	}
+	if kind != lifecycle.Install || backup != nil {
+		return fmt.Errorf("local Docker %s is not implemented with the supplied lifecycle state", kind)
 	}
 	containerName := project + "-server"
 	exists, _, err := d.containerMetadata(ctx, containerName)
@@ -99,15 +114,16 @@ func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, c
 	if err := d.pullImage(ctx, identity.Image); err != nil {
 		return err
 	}
-	deploymentID, err := lifecycle.DeploymentID(candidate)
-	if err != nil {
-		return err
-	}
 	if err := d.ensureManagedVolume(ctx, dataVolume, deploymentID); err != nil {
 		return err
 	}
+	_, err = d.createContainer(ctx, candidate, identity.Image, dataVolume, containerName, deploymentID, hostIP, hostPort, true)
+	return err
+}
+
+func (d *LocalDocker) createContainer(ctx context.Context, candidate plan.DeploymentPlan, image, dataVolume, containerName, deploymentID, hostIP, hostPort string, start bool) (string, error) {
 	payload := map[string]any{
-		"Image":        identity.Image,
+		"Image":        image,
 		"Env":          []string{"PORT=8080", "DEMO_MODE=true", "AUTH_PROVIDERS=github", "ENABLE_SCHEDULER=true", "SQLITE_PATH=/app/data/repo-wrangler.db", "APP_VERSION=" + candidate.Release.Version},
 		"ExposedPorts": map[string]any{"8080/tcp": map[string]any{}},
 		"Labels": map[string]string{
@@ -125,18 +141,142 @@ func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, c
 	}
 	query := url.Values{"name": []string{containerName}}
 	if err := d.dockerJSON(ctx, http.MethodPost, "/containers/create", query, payload, http.StatusCreated, &created); err != nil {
-		return fmt.Errorf("create RepoWrangler container: %w", err)
+		return "", fmt.Errorf("create RepoWrangler container: %w", err)
 	}
 	if created.ID == "" {
-		return errors.New("Docker Engine returned no created container identity")
+		return "", errors.New("Docker Engine returned no created container identity")
 	}
-	if err := d.dockerJSON(ctx, http.MethodPost, "/containers/"+url.PathEscape(created.ID)+"/start", nil, nil, http.StatusNoContent, nil); err != nil {
-		return fmt.Errorf("start RepoWrangler container: %w", err)
+	if start {
+		if err := d.dockerJSON(ctx, http.MethodPost, "/containers/"+url.PathEscape(created.ID)+"/start", nil, nil, http.StatusNoContent, nil); err != nil {
+			return created.ID, fmt.Errorf("start RepoWrangler container: %w", err)
+		}
+	}
+	return created.ID, nil
+}
+
+func (d *LocalDocker) applyUpdate(ctx context.Context, candidate plan.DeploymentPlan, backup *lifecycle.BackupRecord, image, deploymentID, project, hostIP, hostPort string) error {
+	if backup == nil || backup.Target != "local-compose" || backup.DeploymentID != deploymentID || backup.Version == candidate.Release.Version {
+		return errors.New("local Docker update requires the exact prior-version backup for this deployment")
+	}
+	if err := backup.Validate(); err != nil {
+		return fmt.Errorf("validate local update backup: %w", err)
+	}
+	archive, err := d.openVerifiedBackup(*backup)
+	if err != nil {
+		return err
+	}
+	defer archive.Close()
+	containerName := project + "-server"
+	exists, current, err := d.containerMetadata(ctx, containerName)
+	if err != nil {
+		return err
+	}
+	if !exists || !current.Running || current.DataVolume == "" {
+		return errors.New("local Docker update requires a running Ranch Hand-managed deployment with persistent data")
+	}
+	if err := verifyOwnership(current.Labels, deploymentID, "container"); err != nil {
+		return err
+	}
+	if current.Labels["com.wranglerlabs.ranch-hand.version"] != backup.Version {
+		return errors.New("the active container version does not match the recorded update backup")
+	}
+	if err := d.verifyManagedVolume(ctx, current.DataVolume, deploymentID); err != nil {
+		return err
+	}
+	if err := d.pullImage(ctx, image); err != nil {
+		return err
+	}
+	candidateVolume := updateVolumeName(deploymentID, backup.BackupID)
+	if err := d.createExclusiveManagedVolume(ctx, candidateVolume, deploymentID); err != nil {
+		return err
+	}
+	if err := d.dockerJSON(ctx, http.MethodPost, "/containers/"+url.PathEscape(current.ID)+"/stop", url.Values{"t": []string{"30"}}, nil, http.StatusNoContent, nil); err != nil {
+		return fmt.Errorf("stop prior RepoWrangler container for update: %w", err)
+	}
+	rollbackName := rollbackContainerName(project, backup.BackupID)
+	if err := d.renameContainer(ctx, current.ID, rollbackName); err != nil {
+		return err
+	}
+	createdID, err := d.createContainer(ctx, candidate, image, candidateVolume, containerName, deploymentID, hostIP, hostPort, false)
+	if err != nil {
+		return err
+	}
+	if err := d.restoreContainerData(ctx, createdID, archive); err != nil {
+		return err
+	}
+	if err := d.dockerJSON(ctx, http.MethodPost, "/containers/"+url.PathEscape(createdID)+"/start", nil, nil, http.StatusNoContent, nil); err != nil {
+		return fmt.Errorf("start updated RepoWrangler container: %w", err)
+	}
+	return nil
+}
+
+func updateVolumeName(deploymentID, backupID string) string {
+	return "rhv-" + deploymentID[:12] + "-" + backupID[:12]
+}
+
+func rollbackContainerName(project, backupID string) string {
+	return project + "-rollback-" + backupID[:12]
+}
+
+func (d *LocalDocker) renameContainer(ctx context.Context, containerID, name string) error {
+	if err := d.dockerJSON(ctx, http.MethodPost, "/containers/"+url.PathEscape(containerID)+"/rename", url.Values{"name": []string{name}}, nil, http.StatusNoContent, nil); err != nil {
+		return fmt.Errorf("rename RepoWrangler container: %w", err)
+	}
+	return nil
+}
+
+func (d *LocalDocker) openVerifiedBackup(backup lifecycle.BackupRecord) (*os.File, error) {
+	if !localBackupLocatorPattern.MatchString(backup.Artifact.Locator) {
+		return nil, errors.New("local backup locator is not a Ranch Hand archive identity")
+	}
+	rootPath, err := d.localBackupRoot()
+	if err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	archive, err := root.Open(filepath.FromSlash(backup.Artifact.Locator))
+	if err != nil {
+		return nil, fmt.Errorf("open recorded local backup: %w", err)
+	}
+	details, err := archive.Stat()
+	if err != nil || !details.Mode().IsRegular() || details.Size() != backup.Artifact.Size {
+		archive.Close()
+		return nil, errors.New("recorded local backup size or file type is invalid")
+	}
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, archive); err != nil || !strings.EqualFold(hex.EncodeToString(hasher.Sum(nil)), backup.Artifact.SHA256) {
+		archive.Close()
+		return nil, errors.New("recorded local backup failed SHA-256 verification")
+	}
+	if _, err := archive.Seek(0, io.SeekStart); err != nil {
+		archive.Close()
+		return nil, fmt.Errorf("rewind verified local backup: %w", err)
+	}
+	return archive, nil
+}
+
+func (d *LocalDocker) restoreContainerData(ctx context.Context, containerID string, archive io.Reader) error {
+	response, err := d.dockerRawRequest(ctx, http.MethodPut, "/containers/"+url.PathEscape(containerID)+"/archive", url.Values{"path": []string{"/app"}}, archive, "application/x-tar")
+	if err != nil {
+		return fmt.Errorf("restore verified local backup: %w", err)
+	}
+	defer response.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("Docker Engine backup restore returned HTTP %d", response.StatusCode)
 	}
 	return nil
 }
 
 func (d *LocalDocker) Verify(ctx context.Context, candidate plan.DeploymentPlan, _ Credentials) error {
+	return d.verifyVersion(ctx, candidate, candidate.Release.Version)
+}
+
+func (d *LocalDocker) verifyVersion(ctx context.Context, candidate plan.DeploymentPlan, expectedVersion string) error {
 	_, _, _, hostPort, err := localDockerInputs(candidate)
 	if err != nil {
 		return err
@@ -150,17 +290,8 @@ func (d *LocalDocker) Verify(ctx context.Context, candidate plan.DeploymentPlan,
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
-		request, err := http.NewRequestWithContext(deadline, http.MethodGet, "http://127.0.0.1/health/ready", nil)
-		if err != nil {
-			return err
-		}
-		response, requestErr := client.Do(request)
-		if requestErr == nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
-			response.Body.Close()
-			if response.StatusCode == http.StatusOK {
-				return nil
-			}
+		if localHealthReady(deadline, client, expectedVersion) {
+			return nil
 		}
 		select {
 		case <-deadline.Done():
@@ -170,9 +301,60 @@ func (d *LocalDocker) Verify(ctx context.Context, candidate plan.DeploymentPlan,
 	}
 }
 
+func localHealthReady(ctx context.Context, client *http.Client, expectedVersion string) bool {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1/health/ready", nil)
+	if err != nil {
+		return false
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return false
+	}
+	var ready struct {
+		OK bool `json:"ok"`
+	}
+	decodeErr := decodeHealthResponse(response, &ready)
+	if decodeErr != nil || !ready.OK {
+		return false
+	}
+	request, err = http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1/health/live", nil)
+	if err != nil {
+		return false
+	}
+	response, err = client.Do(request)
+	if err != nil {
+		return false
+	}
+	var live struct {
+		OK      bool   `json:"ok"`
+		Version string `json:"version"`
+	}
+	return decodeHealthResponse(response, &live) == nil && live.OK && live.Version == expectedVersion
+}
+
+func decodeHealthResponse(response *http.Response, output any) error {
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+		return errors.New("health endpoint is not ready")
+	}
+	limited := &io.LimitedReader{R: response.Body, N: (64 << 10) + 1}
+	decoder := json.NewDecoder(limited)
+	if err := decoder.Decode(output); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		return errors.New("health endpoint returned invalid JSON")
+	}
+	if limited.N == 0 {
+		return errors.New("health endpoint response exceeded the safety limit")
+	}
+	return nil
+}
+
 func (d *LocalDocker) Recover(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, backup *lifecycle.BackupRecord, _ Credentials) error {
+	if kind == lifecycle.Update {
+		return d.recoverUpdate(ctx, candidate, backup)
+	}
 	if kind != lifecycle.Install || backup != nil {
-		return errors.New("local Docker recovery currently supports only a partial install without a prior backup")
+		return errors.New("local Docker recovery does not support the supplied operation state")
 	}
 	project := candidate.Configuration["projectName"]
 	if !dockerProjectPattern.MatchString(project) {
@@ -196,12 +378,77 @@ func (d *LocalDocker) Recover(ctx context.Context, kind lifecycle.OperationKind,
 	return d.dockerJSON(ctx, http.MethodDelete, "/containers/"+url.PathEscape(metadata.ID), url.Values{"force": []string{"1"}, "v": []string{"1"}}, nil, http.StatusNoContent, nil)
 }
 
+func (d *LocalDocker) recoverUpdate(ctx context.Context, candidate plan.DeploymentPlan, backup *lifecycle.BackupRecord) error {
+	if backup == nil || backup.Target != "local-compose" {
+		return errors.New("local Docker update recovery requires its recorded backup")
+	}
+	if err := backup.Validate(); err != nil {
+		return err
+	}
+	project := candidate.Configuration["projectName"]
+	deploymentID, err := lifecycle.DeploymentID(candidate)
+	if err != nil {
+		return err
+	}
+	if backup.DeploymentID != deploymentID {
+		return errors.New("local Docker recovery backup belongs to a different deployment")
+	}
+	containerName := project + "-server"
+	exists, active, err := d.containerMetadata(ctx, containerName)
+	if err != nil {
+		return err
+	}
+	if exists {
+		if err := verifyOwnership(active.Labels, deploymentID, "container"); err != nil {
+			return err
+		}
+		switch active.Labels["com.wranglerlabs.ranch-hand.version"] {
+		case backup.Version:
+			return d.startAndVerify(ctx, active, candidate, backup.Version)
+		case candidate.Release.Version:
+			if err := d.dockerJSON(ctx, http.MethodDelete, "/containers/"+url.PathEscape(active.ID), url.Values{"force": []string{"1"}}, nil, http.StatusNoContent, nil); err != nil {
+				return fmt.Errorf("remove failed updated RepoWrangler container: %w", err)
+			}
+		default:
+			return errors.New("refusing update recovery because the active container has an unexpected version")
+		}
+	}
+	rollbackName := rollbackContainerName(project, backup.BackupID)
+	exists, rollback, err := d.containerMetadata(ctx, rollbackName)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return errors.New("the preserved pre-update RepoWrangler container is missing")
+	}
+	if err := verifyOwnership(rollback.Labels, deploymentID, "rollback container"); err != nil {
+		return err
+	}
+	if rollback.Labels["com.wranglerlabs.ranch-hand.version"] != backup.Version {
+		return errors.New("the preserved rollback container version does not match the update backup")
+	}
+	if err := d.renameContainer(ctx, rollback.ID, containerName); err != nil {
+		return err
+	}
+	return d.startAndVerify(ctx, rollback, candidate, backup.Version)
+}
+
+func (d *LocalDocker) startAndVerify(ctx context.Context, metadata dockerContainer, candidate plan.DeploymentPlan, expectedVersion string) error {
+	if !metadata.Running {
+		if err := d.dockerJSON(ctx, http.MethodPost, "/containers/"+url.PathEscape(metadata.ID)+"/start", nil, nil, http.StatusNoContent, nil); err != nil {
+			return fmt.Errorf("restart preserved RepoWrangler container: %w", err)
+		}
+	}
+	return d.verifyVersion(ctx, candidate, expectedVersion)
+}
+
 var errDockerNotFound = errors.New("Docker resource not found")
 
 type dockerContainer struct {
-	ID      string
-	Labels  map[string]string
-	Running bool
+	ID         string
+	Labels     map[string]string
+	Running    bool
+	DataVolume string
 }
 
 func (d *LocalDocker) ensureManagedVolume(ctx context.Context, name, deploymentID string) error {
@@ -223,6 +470,26 @@ func (d *LocalDocker) ensureManagedVolume(ctx context.Context, name, deploymentI
 	}}
 	if err := d.dockerJSON(ctx, http.MethodPost, "/volumes/create", nil, payload, http.StatusCreated, &details); err != nil {
 		return fmt.Errorf("create managed RepoWrangler data volume: %w", err)
+	}
+	return nil
+}
+
+func (d *LocalDocker) createExclusiveManagedVolume(ctx context.Context, name, deploymentID string) error {
+	var details struct {
+		Labels map[string]string `json:"Labels"`
+	}
+	err := d.dockerJSON(ctx, http.MethodGet, "/volumes/"+url.PathEscape(name), nil, nil, http.StatusOK, &details)
+	if err == nil {
+		return errors.New("refusing to reuse a pre-existing Docker update volume")
+	}
+	if !errors.Is(err, errDockerNotFound) {
+		return err
+	}
+	payload := map[string]any{"Name": name, "Labels": map[string]string{
+		"com.wranglerlabs.ranch-hand.managed": "true", "com.wranglerlabs.ranch-hand.deployment": deploymentID,
+	}}
+	if err := d.dockerJSON(ctx, http.MethodPost, "/volumes/create", nil, payload, http.StatusCreated, &details); err != nil {
+		return fmt.Errorf("create exclusive RepoWrangler update volume: %w", err)
 	}
 	return nil
 }
@@ -256,6 +523,11 @@ func (d *LocalDocker) containerMetadata(ctx context.Context, name string) (bool,
 		State struct {
 			Running bool `json:"Running"`
 		} `json:"State"`
+		Mounts []struct {
+			Type        string `json:"Type"`
+			Name        string `json:"Name"`
+			Destination string `json:"Destination"`
+		} `json:"Mounts"`
 	}
 	err := d.dockerJSON(ctx, http.MethodGet, "/containers/"+url.PathEscape(name)+"/json", nil, nil, http.StatusOK, &details)
 	if errors.Is(err, errDockerNotFound) {
@@ -267,7 +539,14 @@ func (d *LocalDocker) containerMetadata(ctx context.Context, name string) (bool,
 	if details.ID == "" {
 		return false, dockerContainer{}, errors.New("Docker Engine returned a container without an identity")
 	}
-	return true, dockerContainer{ID: details.ID, Labels: details.Config.Labels, Running: details.State.Running}, nil
+	metadata := dockerContainer{ID: details.ID, Labels: details.Config.Labels, Running: details.State.Running}
+	for _, mount := range details.Mounts {
+		if mount.Type == "volume" && mount.Destination == "/app/data" {
+			metadata.DataVolume = mount.Name
+			break
+		}
+	}
+	return true, metadata, nil
 }
 
 func (d *LocalDocker) archiveContainerData(ctx context.Context, containerID string) (artifact lifecycle.BackupArtifact, operationErr error) {
@@ -439,14 +718,6 @@ func (d *LocalDocker) dockerJSON(ctx context.Context, method, endpoint string, q
 }
 
 func (d *LocalDocker) dockerRequest(ctx context.Context, method, endpoint string, query url.Values, input any) (*http.Response, error) {
-	baseURL := d.baseURL
-	if baseURL == "" {
-		baseURL = "http://docker"
-	}
-	destination := baseURL + endpoint
-	if len(query) > 0 {
-		destination += "?" + query.Encode()
-	}
 	var body io.Reader
 	if input != nil {
 		encoded, err := json.Marshal(input)
@@ -455,11 +726,23 @@ func (d *LocalDocker) dockerRequest(ctx context.Context, method, endpoint string
 		}
 		body = bytes.NewReader(encoded)
 	}
+	return d.dockerRawRequest(ctx, method, endpoint, query, body, "application/json")
+}
+
+func (d *LocalDocker) dockerRawRequest(ctx context.Context, method, endpoint string, query url.Values, body io.Reader, contentType string) (*http.Response, error) {
+	baseURL := d.baseURL
+	if baseURL == "" {
+		baseURL = "http://docker"
+	}
+	destination := baseURL + endpoint
+	if len(query) > 0 {
+		destination += "?" + query.Encode()
+	}
 	request, err := http.NewRequestWithContext(ctx, method, destination, body)
 	if err != nil {
 		return nil, err
 	}
-	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Content-Type", contentType)
 	request.Header.Set("Accept", "application/json")
 	return d.client.Do(request)
 }

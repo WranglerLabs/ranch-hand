@@ -88,12 +88,13 @@ A local journal adds code and durable-state compatibility requirements, but thos
 - Recovery UX must surface active operations and never silently discard an incomplete journal.
 - Retention and redacted diagnostics can operate on structured journals without collecting credentials.
 - Local Docker backups are streamed through the Engine archive API while the owned container is stopped, stored beneath Ranch Hand's user-scoped root, hashed before inventory registration, and followed by restart/readiness verification.
+- Local Docker update uses a new owned volume seeded from the exact recorded backup. The prior stopped container and volume remain untouched in the rollback pool until the new image passes readiness and exact release-identity verification.
 
 ## Action Items
 
 1. [x] Implement stable deployment identity, exclusive active-operation records, atomic transitions, plan snapshots, and event-chain validation.
 2. [x] Enforce backup-first update and operation-specific commit requirements.
 3. [x] Implement the lifecycle coordinator, exact-backup references, backup inventory, and automatic recovery sequencing.
-4. [ ] Implement target mutation methods and expose only coordinator-driven operations through the loopback API. Local Docker evaluation install and consistent backup are complete; local update/restore and the other targets remain.
+4. [ ] Implement target mutation methods and expose only coordinator-driven operations through the loopback API. Local Docker evaluation install, consistent backup, and copy-on-write update are complete; explicit restore/rollback and the other targets remain.
 5. [ ] Add active-operation resume/recover controls to the loopback API and Windows UI.
 6. [ ] Add installation records, rollback-pool retention, and journal schema migration policy.

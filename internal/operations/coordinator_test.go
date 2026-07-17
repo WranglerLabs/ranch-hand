@@ -53,6 +53,7 @@ type fakeMutator struct {
 	applyError      error
 	verifyError     error
 	recoverError    error
+	appliedBackup   *lifecycle.BackupRecord
 	recoveredBackup *lifecycle.BackupRecord
 }
 
@@ -75,8 +76,11 @@ func (f *fakeMutator) Backup(_ context.Context, _ plan.DeploymentPlan, _ adapter
 	return lifecycle.BackupArtifact{Kind: lifecycle.LocalArchive, Locator: "backups/current.tar.gz", Size: 42, SHA256: strings.Repeat("c", 64)}, nil
 }
 
-func (f *fakeMutator) Apply(_ context.Context, _ lifecycle.OperationKind, _ plan.DeploymentPlan, _ bundle.StagedBundle, _ adapter.Credentials) error {
+func (f *fakeMutator) Apply(_ context.Context, _ lifecycle.OperationKind, _ plan.DeploymentPlan, _ bundle.StagedBundle, backup *lifecycle.BackupRecord, _ adapter.Credentials) error {
 	f.calls = append(f.calls, "apply")
+	if backup != nil {
+		f.appliedBackup = backup
+	}
 	return f.applyError
 }
 
@@ -127,6 +131,9 @@ func TestUpdateBacksUpBeforeApply(t *testing.T) {
 	}
 	if strings.Join(mutator.calls, ",") != "backup,apply,verify" {
 		t.Fatalf("backup-first ordering violated: %v", mutator.calls)
+	}
+	if mutator.appliedBackup == nil || mutator.appliedBackup.BackupID != result.Backup.BackupID {
+		t.Fatal("apply did not receive the exact recorded update backup")
 	}
 }
 

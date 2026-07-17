@@ -140,6 +140,11 @@ func TestCreateExportPreflightAndDryRunVerifiedPlan(t *testing.T) {
 	if response.Code != http.StatusOK || runner.request.Kind != lifecycle.Backup || runner.request.FromVersion != "v1.2.3" {
 		t.Fatalf("backup operation was not routed to the coordinator: %d %s", response.Code, response.Body.String())
 	}
+	updateBody := `{"kind":"update","fromVersion":"v1.2.2","plan":` + string(created.Plan) + `,"credentials":{}}`
+	response = authorizedPost(h, "/api/v1/operations/run", updateBody)
+	if response.Code != http.StatusOK || runner.request.Kind != lifecycle.Update || runner.request.FromVersion != "v1.2.2" {
+		t.Fatalf("update operation was not routed to the coordinator: %d %s", response.Code, response.Body.String())
+	}
 }
 
 func authorizedPost(h http.Handler, path, body string) *httptest.ResponseRecorder {

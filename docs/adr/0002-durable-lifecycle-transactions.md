@@ -99,4 +99,4 @@ A local journal adds code and durable-state compatibility requirements, but thos
 4. [x] Implement bounded evaluation install methods for all four initial targets and expose them only through coordinator-driven loopback operations. Local Docker consistent backup, update, restore, rollback, and repair are also complete.
 5. [x] Add active-operation recovery controls to the loopback API and Windows UI, with retryable recovery locks and fresh in-memory credentials.
 6. [x] Add durable installation/current-version records and an explicit lifecycle schema migration policy.
-7. [ ] Add rollback-pool retention and pruning controls.
+7. [x] Add explicit local rollback-pool inventory and keep-newest retention controls with immediate ownership revalidation.

@@ -15,8 +15,19 @@ h1 { margin-bottom: 0; font-size: 1.35rem; }
 .notice p { margin: 8px 0 0; }
 dl { display: flex; flex-wrap: wrap; gap: 32px; margin: 18px 0 0; }
 dt { color: #8faf99; font-size: .75rem; text-transform: uppercase; } dd { margin: 4px 0 0; font-weight: 700; }
+.release-panel { margin: 28px 0; padding: 28px; border: 1px solid #345845; border-radius: 18px; background: #101915cc; }
+.release-panel > p:not(.eyebrow) { max-width: 780px; color: #a9bcb0; line-height: 1.55; }
+form { display: grid; grid-template-columns: 1fr 1fr auto; align-items: end; gap: 14px; margin-top: 24px; }
+label { display: grid; gap: 8px; color: #9fc4ad; font-size: .78rem; font-weight: 800; text-transform: uppercase; }
+input, select { width: 100%; min-height: 46px; padding: 10px 12px; border: 1px solid #3b5c49; border-radius: 10px; color: #eaf4ee; background: #0b1210; font: inherit; }
+button { min-height: 46px; padding: 0 18px; border: 0; border-radius: 10px; color: #172018; background: #e3a23b; font-weight: 900; cursor: pointer; }
+button:disabled { cursor: wait; opacity: .65; }
+.inline-result { margin-top: 18px; padding: 18px; border: 1px solid #345845; border-radius: 12px; background: #122019; }
+.inline-result.error { border-color: #8a4e46; background: #281714; }
+.inline-result p { margin: 8px 0 0; }
+.digest { max-width: 340px; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .78rem; }
 .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
 article { min-height: 180px; padding: 24px; border: 1px solid #263b30; border-radius: 18px; background: #101915cc; }
 article h3 { font-size: 1.2rem; } article p { color: #a9bcb0; line-height: 1.5; } article span { color: #e3a23b; font-size: .78rem; font-weight: 800; text-transform: uppercase; }
 footer { margin-top: 40px; color: #71877a; font-size: .85rem; }
-@media (max-width: 680px) { main { width: min(100% - 28px, 1080px); } .hero { padding-top: 70px; } .grid { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { main { width: min(100% - 28px, 1080px); } .hero { padding-top: 70px; } form, .grid { grid-template-columns: 1fr; } }

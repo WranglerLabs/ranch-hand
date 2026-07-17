@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -12,22 +13,40 @@ import (
 	"time"
 
 	"github.com/WranglerLabs/ranch-hand/internal/plan"
+	productrelease "github.com/WranglerLabs/ranch-hand/internal/release"
 )
 
-const maxPlanSize = 1 << 20
+const (
+	maxPlanSize           = 1 << 20
+	maxReleaseRequestSize = 64 << 10
+)
+
+type releaseVerifier interface {
+	VerifyAndCache(context.Context, productrelease.Request) (productrelease.VerifiedArtifact, error)
+}
 
 type Server struct {
-	token   string
-	version string
-	ui      fs.FS
+	token           string
+	version         string
+	ui              fs.FS
+	releaseVerifier releaseVerifier
 }
 
 func New(token, version string, ui fs.FS) http.Handler {
-	s := &Server{token: token, version: version, ui: ui}
+	verifier, err := productrelease.NewService("")
+	if err != nil {
+		verifier = nil
+	}
+	return NewWithReleaseVerifier(token, version, ui, verifier)
+}
+
+func NewWithReleaseVerifier(token, version string, ui fs.FS, verifier releaseVerifier) http.Handler {
+	s := &Server{token: token, version: version, ui: ui, releaseVerifier: verifier}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", s.live)
 	mux.Handle("GET /api/v1/status", s.authorize(http.HandlerFunc(s.status)))
 	mux.Handle("POST /api/v1/plans/validate", s.authorize(http.HandlerFunc(s.validatePlan)))
+	mux.Handle("POST /api/v1/releases/verify", s.authorize(http.HandlerFunc(s.verifyRelease)))
 	mux.Handle("/", s.spa())
 	return s.securityHeaders(mux)
 }
@@ -58,6 +77,34 @@ func (s *Server) validatePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"valid": true, "plan": candidate})
+}
+
+func (s *Server) verifyRelease(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request rejected"})
+		return
+	}
+	if s.releaseVerifier == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "release verification is unavailable because the local cache could not be initialized"})
+		return
+	}
+	var request productrelease.Request
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxReleaseRequestSize))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid release verification request"})
+		return
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "release verification request contains trailing data"})
+		return
+	}
+	verified, err := s.releaseVerifier.VerifyAndCache(r.Context(), request)
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"verified": true, "artifact": verified})
 }
 
 func (s *Server) authorize(next http.Handler) http.Handler {
@@ -115,5 +162,5 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func DefaultHTTPServer(address string, handler http.Handler) *http.Server {
-	return &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	return &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 10 * time.Minute, IdleTimeout: 60 * time.Second}
 }

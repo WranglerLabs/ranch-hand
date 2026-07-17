@@ -2,7 +2,7 @@
 
 Ranch Hand is the standalone, Windows-first lifecycle manager for [RepoWrangler](https://github.com/WranglerLabs/repo-wrangler). It is for operators who want to install and manage RepoWrangler without cloning or forking its source repository. Contributors and advanced operators can still use RepoWrangler's documented deployment recipes directly.
 
-> **Status:** early implementation. The secure local application shell and versioned contract validation are working. Deployment adapters do not apply infrastructure yet and this repository is not a production installer release.
+> **Status:** early implementation. The secure local application shell, versioned contract validation, and immutable release bundle verification/cache are working. Deployment adapters do not apply infrastructure yet and this repository is not a production installer release.
 
 ## First release scope
 
@@ -19,6 +19,12 @@ Ranch Hand is optional. It is not a RepoWrangler feature screen, does not change
 The embedded UI talks to a Go control service on a random `127.0.0.1` port. A cryptographically random per-launch bearer token is passed in the URL fragment and removed from browser history immediately. API responses are non-cacheable, browser mutations are same-origin checked, and the UI uses a restrictive content security policy.
 
 Plans must never contain passwords, tokens, private keys, client secrets, or provider credentials. Runtime secrets will be held only as long as required and written solely to the target platform's supported secret store.
+
+## Release verification
+
+The local interface accepts an explicit RepoWrangler version and deployment target. Ranch Hand retrieves the official versioned manifest and target bundle over HTTPS, restricts redirects to the trusted GitHub release infrastructure, enforces response-size limits, verifies the declared byte count and SHA-256, and atomically stores the verified bundle in the user's versioned application cache. A matching cached file is hashed again before reuse; partial or mismatched downloads are removed.
+
+SBOM and build-attestation verification are subsequent release-candidate gates. Their URLs are validated now, but this early build does not yet classify them as verified.
 
 ## Build from source
 

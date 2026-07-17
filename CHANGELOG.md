@@ -6,6 +6,18 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.2] - 2026-07-17
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- Made the normal deployment workflow discover and preselect the latest stable
+  RepoWrangler release compatible with the selected target. Prerelease and
+  specific-version deployment are now explicit operator choices instead of
+  requiring every user to know and type a release tag.
+
 ### Documentation
 
 - Classified `v0.1.0-rc.1` as the first Ranch Hand Public Preview and made it the

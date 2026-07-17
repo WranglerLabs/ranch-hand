@@ -21,6 +21,7 @@ import (
 
 const (
 	maxManifestSize   = 1 << 20
+	maxCatalogSize    = 2 << 20
 	maxArtifactSize   = int64(4 << 30)
 	maxProvenanceSize = 8 << 20
 	maxSBOMSize       = 64 << 20
@@ -36,6 +37,13 @@ var defaultTrustedHosts = []string{
 var safeArtifactFilename = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$`)
 
 const officialReleaseBaseURL = "https://github.com/WranglerLabs/repo-wrangler/releases/download"
+const officialReleaseCatalogURL = "https://api.github.com/repos/WranglerLabs/repo-wrangler/releases?per_page=30"
+
+type DiscoveredRelease struct {
+	Version     string `json:"version"`
+	ManifestURL string `json:"manifestUrl"`
+	Prerelease  bool   `json:"prerelease"`
+}
 
 type Request struct {
 	ManifestURL    string `json:"manifestUrl"`
@@ -69,6 +77,7 @@ type Service struct {
 	cacheRoot    string
 	trustedHosts map[string]bool
 	releaseBase  *url.URL
+	catalogURL   *url.URL
 	provenance   ProvenanceVerifier
 }
 
@@ -100,6 +109,14 @@ func NewServiceWithClient(cacheRoot string, client *http.Client, trustedHosts []
 	}
 	releaseBase.RawQuery = ""
 	releaseBase.Fragment = ""
+	catalogURLRaw := strings.TrimSuffix(releaseBaseURL, "/") + "/releases"
+	if releaseBaseURL == officialReleaseBaseURL {
+		catalogURLRaw = officialReleaseCatalogURL
+	}
+	catalogURL, err := url.Parse(catalogURLRaw)
+	if err != nil || catalogURL.Scheme != "https" || catalogURL.Host == "" || !hosts[strings.ToLower(catalogURL.Hostname())] {
+		return nil, errors.New("release catalog must be an absolute HTTPS URL on a trusted host")
+	}
 	provenance, err := NewSigstoreProvenanceVerifier(cacheRoot)
 	if err != nil {
 		return nil, err
@@ -119,7 +136,70 @@ func NewServiceWithClient(cacheRoot string, client *http.Client, trustedHosts []
 		}
 		return nil
 	}
-	return &Service{client: &copyClient, cacheRoot: cacheRoot, trustedHosts: hosts, releaseBase: releaseBase, provenance: provenance}, nil
+	return &Service{client: &copyClient, cacheRoot: cacheRoot, trustedHosts: hosts, releaseBase: releaseBase, catalogURL: catalogURL, provenance: provenance}, nil
+}
+
+// Discover returns the newest published release in the requested channel that
+// contains a valid manifest and an artifact for the selected target. Discovery
+// chooses a version; VerifyAndCache still performs the complete immutable
+// manifest, artifact, provenance, and SBOM verification before use.
+func (s *Service) Discover(ctx context.Context, channel, target string) (DiscoveredRelease, error) {
+	if channel != "stable" && channel != "prerelease" {
+		return DiscoveredRelease{}, errors.New("release channel must be stable or prerelease")
+	}
+	if err := ValidateTarget(target); err != nil {
+		return DiscoveredRelease{}, err
+	}
+	contents, err := s.downloadBytes(ctx, s.catalogURL, maxCatalogSize)
+	if err != nil {
+		return DiscoveredRelease{}, fmt.Errorf("download release catalog: %w", err)
+	}
+	var releases []struct {
+		TagName    string `json:"tag_name"`
+		Draft      bool   `json:"draft"`
+		Prerelease bool   `json:"prerelease"`
+		Assets     []struct {
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+		} `json:"assets"`
+	}
+	if err := json.Unmarshal(contents, &releases); err != nil {
+		return DiscoveredRelease{}, fmt.Errorf("decode release catalog: %w", err)
+	}
+	for _, candidate := range releases {
+		if candidate.Draft || candidate.Prerelease != (channel == "prerelease") || ValidateVersion(candidate.TagName) != nil {
+			continue
+		}
+		if channel == "stable" && strings.Contains(candidate.TagName, "-") {
+			continue
+		}
+		expected := s.releaseURL(candidate.TagName, "release-manifest.json")
+		manifestPublished := false
+		for _, asset := range candidate.Assets {
+			if asset.Name == "release-manifest.json" && asset.BrowserDownloadURL == expected.String() {
+				manifestPublished = true
+				break
+			}
+		}
+		if !manifestPublished {
+			continue
+		}
+		manifestBytes, err := s.downloadBytes(ctx, expected, maxManifestSize)
+		if err != nil {
+			continue
+		}
+		var manifest Manifest
+		decoder := json.NewDecoder(bytes.NewReader(manifestBytes))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&manifest) != nil || decoder.Decode(&struct{}{}) != io.EOF || manifest.Validate(candidate.TagName, s.validateURL) != nil {
+			continue
+		}
+		if _, err := manifest.Artifact(target); err != nil {
+			continue
+		}
+		return DiscoveredRelease{Version: candidate.TagName, ManifestURL: expected.String(), Prerelease: candidate.Prerelease}, nil
+	}
+	return DiscoveredRelease{}, fmt.Errorf("no compatible %s RepoWrangler release is published for target %q", channel, target)
 }
 
 func (s *Service) VerifyAndCache(ctx context.Context, request Request) (VerifiedArtifact, error) {

@@ -35,12 +35,19 @@ type fakeBundleStager struct {
 }
 
 type fakeOperationRunner struct {
-	request operations.Request
+	request              operations.Request
+	recoveryDeploymentID string
+}
+
+func (f *fakeOperationRunner) RecoverActive(_ context.Context, deploymentID string, _ adapter.Credentials) (operations.Result, error) {
+	f.recoveryDeploymentID = deploymentID
+	return operations.Result{Journal: lifecycle.Journal{Phase: lifecycle.Recovered}, Recovered: true}, nil
 }
 
 type fakeInstallationReader struct {
 	records []lifecycle.InstallationRecord
 	backups []lifecycle.BackupRecord
+	active  []lifecycle.Journal
 	err     error
 }
 
@@ -54,6 +61,10 @@ func (f *fakeInstallationReader) Backups(string) ([]lifecycle.BackupRecord, erro
 
 func (f *fakeInstallationReader) Active(string) (lifecycle.Journal, error) {
 	return lifecycle.Journal{}, os.ErrNotExist
+}
+
+func (f *fakeInstallationReader) ActiveOperations() ([]lifecycle.Journal, error) {
+	return f.active, f.err
 }
 
 func (f *fakeOperationRunner) Run(_ context.Context, request operations.Request) (operations.Result, error) {
@@ -174,6 +185,11 @@ func TestCreateExportPreflightAndDryRunVerifiedPlan(t *testing.T) {
 	if response.Code != http.StatusOK || runner.request.Kind != lifecycle.Repair {
 		t.Fatalf("repair operation was not routed to the coordinator: %d %s", response.Code, response.Body.String())
 	}
+	deploymentID := "0123456789abcdef01234567"
+	response = authorizedPost(h, "/api/v1/operations/"+deploymentID+"/recover", `{"credentials":{}}`)
+	if response.Code != http.StatusOK || runner.recoveryDeploymentID != deploymentID || !strings.Contains(response.Body.String(), `"recovered":true`) {
+		t.Fatalf("active recovery was not routed to the coordinator: %d %s", response.Code, response.Body.String())
+	}
 }
 
 func authorizedPost(h http.Handler, path, body string) *httptest.ResponseRecorder {
@@ -190,7 +206,10 @@ func TestListsInstallationRecords(t *testing.T) {
 	reader := &fakeInstallationReader{records: []lifecycle.InstallationRecord{{
 		DeploymentID: "0123456789abcdef01234567", Target: "local-compose",
 		State: lifecycle.InstallationActive, Version: "v1.2.3",
-	}}, backups: []lifecycle.BackupRecord{{BackupID: strings.Repeat("b", 32), Version: "v1.2.2"}}}
+	}}, backups: []lifecycle.BackupRecord{{BackupID: strings.Repeat("b", 32), Version: "v1.2.2"}}, active: []lifecycle.Journal{{
+		DeploymentID: "0123456789abcdef01234567", OperationID: strings.Repeat("d", 32), Kind: lifecycle.Update,
+		Target: "local-compose", FromVersion: "v1.2.2", ToVersion: "v1.2.3", Phase: lifecycle.Staged,
+	}}}
 	h := newWithServices("secret-token", "test", testUI(), nil, nil, nil, nil, reader)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/installations", nil)
 	request.Header.Set("Authorization", "Bearer secret-token")
@@ -213,6 +232,13 @@ func TestListsInstallationRecords(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Header().Get("Content-Disposition"), "attachment") ||
 		!strings.Contains(response.Body.String(), `"name":"Ranch Hand"`) || strings.Contains(response.Body.String(), `"plan"`) || strings.Contains(response.Body.String(), `"locator"`) {
 		t.Fatalf("diagnostics export returned %d: %s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/operations/active", nil)
+	request.Header.Set("Authorization", "Bearer secret-token")
+	response = httptest.NewRecorder()
+	h.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"phase":"staged"`) {
+		t.Fatalf("active operation inventory returned %d: %s", response.Code, response.Body.String())
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -314,6 +315,42 @@ func (s *Store) Active(deploymentID string) (Journal, error) {
 		return Journal{}, err
 	}
 	return s.readActive(filepath.Join(s.deploymentDirectory(deploymentID), "active"), deploymentID)
+}
+
+func (s *Store) ActiveOperations() ([]Journal, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	root := filepath.Join(s.root, "deployments")
+	if err := rejectSymlinkComponents(s.root, root); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return []Journal{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	active := make([]Journal, 0)
+	for _, entry := range entries {
+		if !idPattern.MatchString(entry.Name()) || !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		directory := filepath.Join(root, entry.Name())
+		if err := rejectSymlinkComponents(s.root, directory); err != nil {
+			return nil, err
+		}
+		journal, err := s.readActive(filepath.Join(directory, "active"), entry.Name())
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		active = append(active, journal)
+	}
+	sort.Slice(active, func(i, j int) bool { return active[i].UpdatedAt.After(active[j].UpdatedAt) })
+	return active, nil
 }
 
 func (s *Store) readActive(activePath, deploymentID string) (Journal, error) {

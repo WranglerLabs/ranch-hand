@@ -44,12 +44,14 @@ type bundleStager interface {
 
 type operationRunner interface {
 	Run(context.Context, operations.Request) (operations.Result, error)
+	RecoverActive(context.Context, string, adapter.Credentials) (operations.Result, error)
 }
 
 type installationReader interface {
 	Installations() ([]lifecycle.InstallationRecord, error)
 	Backups(string) ([]lifecycle.BackupRecord, error)
 	Active(string) (lifecycle.Journal, error)
+	ActiveOperations() ([]lifecycle.Journal, error)
 }
 
 type Server struct {
@@ -112,12 +114,72 @@ func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, 
 	mux.Handle("POST /api/v1/targets/preflight", s.authorize(http.HandlerFunc(s.preflightTarget)))
 	mux.Handle("POST /api/v1/bundles/stage", s.authorize(http.HandlerFunc(s.stageBundle)))
 	mux.Handle("POST /api/v1/operations/run", s.authorize(http.HandlerFunc(s.runOperation)))
+	mux.Handle("GET /api/v1/operations/active", s.authorize(http.HandlerFunc(s.listActiveOperations)))
+	mux.Handle("POST /api/v1/operations/{deploymentID}/recover", s.authorize(http.HandlerFunc(s.recoverActiveOperation)))
 	mux.Handle("GET /api/v1/installations", s.authorize(http.HandlerFunc(s.listInstallations)))
 	mux.Handle("GET /api/v1/installations/{deploymentID}/backups", s.authorize(http.HandlerFunc(s.listBackups)))
 	mux.Handle("GET /api/v1/diagnostics", s.authorize(http.HandlerFunc(s.exportDiagnostics)))
 	mux.Handle("POST /api/v1/releases/verify", s.authorize(http.HandlerFunc(s.verifyRelease)))
 	mux.Handle("/", s.spa())
 	return s.securityHeaders(mux)
+}
+
+func (s *Server) listActiveOperations(w http.ResponseWriter, _ *http.Request) {
+	if s.installations == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "active operation inventory is unavailable"})
+		return
+	}
+	active, err := s.installations.ActiveOperations()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "read active operations: " + err.Error()})
+		return
+	}
+	type summary struct {
+		DeploymentID string                  `json:"deploymentId"`
+		OperationID  string                  `json:"operationId"`
+		Kind         lifecycle.OperationKind `json:"kind"`
+		Target       string                  `json:"target"`
+		FromVersion  string                  `json:"fromVersion,omitempty"`
+		ToVersion    string                  `json:"toVersion"`
+		Phase        lifecycle.Phase         `json:"phase"`
+		UpdatedAt    time.Time               `json:"updatedAt"`
+	}
+	result := make([]summary, 0, len(active))
+	for _, journal := range active {
+		result = append(result, summary{
+			DeploymentID: journal.DeploymentID, OperationID: journal.OperationID, Kind: journal.Kind,
+			Target: journal.Target, FromVersion: journal.FromVersion, ToVersion: journal.ToVersion,
+			Phase: journal.Phase, UpdatedAt: journal.UpdatedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"operations": result})
+}
+
+func (s *Server) recoverActiveOperation(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request rejected"})
+		return
+	}
+	if s.coordinator == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "lifecycle recovery is unavailable"})
+		return
+	}
+	var request struct {
+		Credentials adapter.Credentials `json:"credentials"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxTargetRequestSize))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid lifecycle recovery request"})
+		return
+	}
+	defer request.Credentials.Clear()
+	result, err := s.coordinator.RecoverActive(r.Context(), r.PathValue("deploymentID"), request.Credentials)
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": err.Error(), "operation": result})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"completed": true, "operation": result})
 }
 
 func (s *Server) exportDiagnostics(w http.ResponseWriter, _ *http.Request) {

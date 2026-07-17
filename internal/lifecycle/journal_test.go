@@ -152,6 +152,27 @@ func TestSecondOperationIsRejectedWhileActive(t *testing.T) {
 	}
 }
 
+func TestListsActiveOperationsNewestFirst(t *testing.T) {
+	store := testStore(t)
+	first, err := store.Begin(Install, lifecyclePlan("v1.2.3"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPlan := lifecyclePlan("v1.2.3")
+	secondPlan.Configuration["projectName"] = "second"
+	secondPlan.Configuration["dataVolume"] = "second-data"
+	second, err := store.Begin(Install, secondPlan, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := store.ActiveOperations()
+	if err != nil || len(active) != 2 || active[0].OperationID != second.OperationID || active[1].OperationID != first.OperationID {
+		t.Fatalf("active operation inventory failed: %+v, %v", active, err)
+	}
+	transition(t, store, first, Failed)
+	transition(t, store, second, Failed)
+}
+
 func TestJournalHeaderTamperingIsDetected(t *testing.T) {
 	store := testStore(t)
 	journal, err := store.Begin(Install, lifecyclePlan("v1.2.3"), "")

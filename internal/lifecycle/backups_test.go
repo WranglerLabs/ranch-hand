@@ -7,6 +7,7 @@ import (
 
 func TestRecordAndListBackup(t *testing.T) {
 	store := testStore(t)
+	commitInstall(t, store, lifecyclePlan("v1.2.3"))
 	journal, err := store.Begin(Update, lifecyclePlan("v1.2.4"), "v1.2.3")
 	if err != nil {
 		t.Fatal(err)
@@ -41,6 +42,7 @@ func TestRejectsCredentialBearingBackupLocator(t *testing.T) {
 
 func TestBackupRequiresActivePreparedOperation(t *testing.T) {
 	store := testStore(t)
+	commitInstall(t, store, lifecyclePlan("v1.2.3"))
 	journal, err := store.Begin(Update, lifecyclePlan("v1.2.4"), "v1.2.3")
 	if err != nil {
 		t.Fatal(err)

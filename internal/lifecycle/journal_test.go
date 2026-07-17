@@ -77,6 +77,7 @@ func TestInstallJournalCommitsAndReleasesLock(t *testing.T) {
 
 func TestUpdateRequiresBackupBeforeCommit(t *testing.T) {
 	store := testStore(t)
+	commitInstall(t, store, lifecyclePlan("v1.2.3"))
 	journal, err := store.Begin(Update, lifecyclePlan("v1.2.4"), "v1.2.3")
 	if err != nil {
 		t.Fatal(err)
@@ -90,6 +91,11 @@ func TestUpdateRequiresBackupBeforeCommit(t *testing.T) {
 
 func TestBackupFirstUpdateCommits(t *testing.T) {
 	store := testStore(t)
+	installed, err := store.Begin(Install, lifecyclePlan("v1.2.3"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition(t, store, installed, Staged, Applied, Verified, Committed)
 	journal, err := store.Begin(Update, lifecyclePlan("v1.2.4"), "v1.2.3")
 	if err != nil {
 		t.Fatal(err)

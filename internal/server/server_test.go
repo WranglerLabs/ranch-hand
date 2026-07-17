@@ -38,6 +38,15 @@ type fakeOperationRunner struct {
 	request operations.Request
 }
 
+type fakeInstallationReader struct {
+	records []lifecycle.InstallationRecord
+	err     error
+}
+
+func (f *fakeInstallationReader) Installations() ([]lifecycle.InstallationRecord, error) {
+	return f.records, f.err
+}
+
 func (f *fakeOperationRunner) Run(_ context.Context, request operations.Request) (operations.Result, error) {
 	f.request = request
 	return operations.Result{Journal: lifecycle.Journal{Phase: lifecycle.Committed}}, nil
@@ -72,7 +81,7 @@ func TestCreateExportPreflightAndDryRunVerifiedPlan(t *testing.T) {
 	targets := &fakeTargetPreflighter{}
 	stager := &fakeBundleStager{}
 	runner := &fakeOperationRunner{}
-	h := newWithServices("secret-token", "test", testUI(), verifier, targets, stager, runner)
+	h := newWithServices("secret-token", "test", testUI(), verifier, targets, stager, runner, nil)
 	manifest := "https://github.com/WranglerLabs/repo-wrangler/releases/download/v1.2.3/release-manifest.json"
 	verifyBody := `{"manifestUrl":"` + manifest + `","version":"v1.2.3","target":"local-compose"}`
 	response := authorizedPost(h, "/api/v1/releases/verify", verifyBody)
@@ -155,6 +164,21 @@ func authorizedPost(h http.Handler, path, body string) *httptest.ResponseRecorde
 	response := httptest.NewRecorder()
 	h.ServeHTTP(response, request)
 	return response
+}
+
+func TestListsInstallationRecords(t *testing.T) {
+	reader := &fakeInstallationReader{records: []lifecycle.InstallationRecord{{
+		DeploymentID: "0123456789abcdef01234567", Target: "local-compose",
+		State: lifecycle.InstallationActive, Version: "v1.2.3",
+	}}}
+	h := newWithServices("secret-token", "test", testUI(), nil, nil, nil, nil, reader)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/installations", nil)
+	request.Header.Set("Authorization", "Bearer secret-token")
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"version":"v1.2.3"`) || !strings.Contains(response.Body.String(), `"state":"active"`) {
+		t.Fatalf("installation inventory returned %d: %s", response.Code, response.Body.String())
+	}
 }
 
 func TestStatusRequiresLaunchToken(t *testing.T) {

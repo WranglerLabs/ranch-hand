@@ -97,4 +97,5 @@ A local journal adds code and durable-state compatibility requirements, but thos
 3. [x] Implement the lifecycle coordinator, exact-backup references, backup inventory, and automatic recovery sequencing.
 4. [x] Implement bounded evaluation install methods for all four initial targets and expose them only through coordinator-driven loopback operations. Local Docker consistent backup and copy-on-write update are also complete.
 5. [ ] Add active-operation resume/recover controls to the loopback API and Windows UI.
-6. [ ] Add installation records, rollback-pool retention, and journal schema migration policy.
+6. [x] Add durable installation/current-version records and an explicit lifecycle schema migration policy.
+7. [ ] Add rollback-pool retention and pruning controls.

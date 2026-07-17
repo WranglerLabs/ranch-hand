@@ -45,6 +45,10 @@ type operationRunner interface {
 	Run(context.Context, operations.Request) (operations.Result, error)
 }
 
+type installationReader interface {
+	Installations() ([]lifecycle.InstallationRecord, error)
+}
+
 type Server struct {
 	token           string
 	version         string
@@ -55,6 +59,7 @@ type Server struct {
 	targets         targetPreflighter
 	stager          bundleStager
 	coordinator     operationRunner
+	installations   installationReader
 	readyMu         sync.RWMutex
 	readyPlans      map[string]bool
 }
@@ -68,6 +73,10 @@ func New(token, version string, ui fs.FS) http.Handler {
 	stager, stageErr := bundle.NewStager("")
 	store, storeErr := lifecycle.NewStore("")
 	var coordinator operationRunner
+	var installations installationReader
+	if storeErr == nil {
+		installations = store
+	}
 	if stageErr == nil && storeErr == nil {
 		localDocker := adapter.NewLocalDocker()
 		coordinator, _ = operations.NewCoordinator(store, stager, operations.NewRegistry(map[string]operations.Mutator{
@@ -75,7 +84,7 @@ func New(token, version string, ui fs.FS) http.Handler {
 			"cloudflare": adapter.NewCloudflare(), "remote-linux-compose": adapter.NewRemoteLinuxCompose(),
 		}))
 	}
-	return newWithServices(token, version, ui, verifier, targets, stager, coordinator)
+	return newWithServices(token, version, ui, verifier, targets, stager, coordinator, installations)
 }
 
 func NewWithReleaseVerifier(token, version string, ui fs.FS, verifier releaseVerifier) http.Handler {
@@ -84,11 +93,11 @@ func NewWithReleaseVerifier(token, version string, ui fs.FS, verifier releaseVer
 
 func NewWithDependencies(token, version string, ui fs.FS, verifier releaseVerifier, targets targetPreflighter) http.Handler {
 	stager, _ := bundle.NewStager("")
-	return newWithServices(token, version, ui, verifier, targets, stager, nil)
+	return newWithServices(token, version, ui, verifier, targets, stager, nil, nil)
 }
 
-func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, targets targetPreflighter, stager bundleStager, coordinator operationRunner) http.Handler {
-	s := &Server{token: token, version: version, ui: ui, releaseVerifier: verifier, verified: make(map[string]productrelease.VerifiedArtifact), targets: targets, stager: stager, coordinator: coordinator, readyPlans: make(map[string]bool)}
+func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, targets targetPreflighter, stager bundleStager, coordinator operationRunner, installations installationReader) http.Handler {
+	s := &Server{token: token, version: version, ui: ui, releaseVerifier: verifier, verified: make(map[string]productrelease.VerifiedArtifact), targets: targets, stager: stager, coordinator: coordinator, installations: installations, readyPlans: make(map[string]bool)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", s.live)
 	mux.Handle("GET /api/v1/status", s.authorize(http.HandlerFunc(s.status)))
@@ -100,9 +109,23 @@ func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, 
 	mux.Handle("POST /api/v1/targets/preflight", s.authorize(http.HandlerFunc(s.preflightTarget)))
 	mux.Handle("POST /api/v1/bundles/stage", s.authorize(http.HandlerFunc(s.stageBundle)))
 	mux.Handle("POST /api/v1/operations/run", s.authorize(http.HandlerFunc(s.runOperation)))
+	mux.Handle("GET /api/v1/installations", s.authorize(http.HandlerFunc(s.listInstallations)))
 	mux.Handle("POST /api/v1/releases/verify", s.authorize(http.HandlerFunc(s.verifyRelease)))
 	mux.Handle("/", s.spa())
 	return s.securityHeaders(mux)
+}
+
+func (s *Server) listInstallations(w http.ResponseWriter, _ *http.Request) {
+	if s.installations == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "installation records are unavailable"})
+		return
+	}
+	records, err := s.installations.Installations()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "read installation records: " + err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"installations": records})
 }
 
 func (s *Server) runOperation(w http.ResponseWriter, r *http.Request) {

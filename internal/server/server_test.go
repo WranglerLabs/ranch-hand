@@ -52,6 +52,10 @@ func (f *fakeInstallationReader) Backups(string) ([]lifecycle.BackupRecord, erro
 	return f.backups, f.err
 }
 
+func (f *fakeInstallationReader) Active(string) (lifecycle.Journal, error) {
+	return lifecycle.Journal{}, os.ErrNotExist
+}
+
 func (f *fakeOperationRunner) Run(_ context.Context, request operations.Request) (operations.Result, error) {
 	f.request = request
 	return operations.Result{Journal: lifecycle.Journal{Phase: lifecycle.Committed}}, nil
@@ -201,6 +205,14 @@ func TestListsInstallationRecords(t *testing.T) {
 	h.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"version":"v1.2.2"`) {
 		t.Fatalf("backup inventory returned %d: %s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/diagnostics", nil)
+	request.Header.Set("Authorization", "Bearer secret-token")
+	response = httptest.NewRecorder()
+	h.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Header().Get("Content-Disposition"), "attachment") ||
+		!strings.Contains(response.Body.String(), `"name":"Ranch Hand"`) || strings.Contains(response.Body.String(), `"plan"`) || strings.Contains(response.Body.String(), `"locator"`) {
+		t.Fatalf("diagnostics export returned %d: %s", response.Code, response.Body.String())
 	}
 }
 

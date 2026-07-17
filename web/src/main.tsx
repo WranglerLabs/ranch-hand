@@ -278,6 +278,21 @@ function App() {
     URL.revokeObjectURL(href);
   }
 
+  async function exportDiagnostics() {
+    const response = await fetch("/api/v1/diagnostics", { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) {
+      const failure = await response.json().catch(() => ({ error: "Diagnostics export failed" })) as { error?: string };
+      setError(failure.error || "Diagnostics export failed");
+      return;
+    }
+    const href = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = href;
+    link.download = "ranch-hand-diagnostics.json";
+    link.click();
+    URL.revokeObjectURL(href);
+  }
+
   async function runTargetPreflight(event: React.FormEvent) {
     event.preventDefault();
     if (!planResult) return;
@@ -456,7 +471,7 @@ function App() {
         <p className="lede">Ranch Hand will verify immutable releases, build a secret-free deployment plan, and guide lifecycle operations from this local Windows application.</p>
       </section>
       {error && <section className="notice error" role="alert"><strong>Session unavailable</strong><p>{error}</p></section>}
-      {status && <section className="notice success"><strong>Local control service is ready</strong><dl><div><dt>Version</dt><dd>{status.version}</dd></div><div><dt>API</dt><dd>{status.apiVersion}</dd></div><div><dt>Platform</dt><dd>{status.platform}</dd></div></dl></section>}
+      {status && <section className="notice success"><strong>Local control service is ready</strong><dl><div><dt>Version</dt><dd>{status.version}</dd></div><div><dt>API</dt><dd>{status.apiVersion}</dd></div><div><dt>Platform</dt><dd>{status.platform}</dd></div></dl><button type="button" className="secondary" onClick={exportDiagnostics}>Export redacted diagnostics</button></section>}
       <section className="release-panel" aria-labelledby="release-heading">
         <p className="eyebrow">Immutable release</p>
         <h2 id="release-heading">Verify a RepoWrangler bundle</h2>

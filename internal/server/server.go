@@ -17,6 +17,7 @@ import (
 
 	"github.com/WranglerLabs/ranch-hand/internal/adapter"
 	"github.com/WranglerLabs/ranch-hand/internal/bundle"
+	"github.com/WranglerLabs/ranch-hand/internal/diagnostics"
 	"github.com/WranglerLabs/ranch-hand/internal/lifecycle"
 	"github.com/WranglerLabs/ranch-hand/internal/operations"
 	"github.com/WranglerLabs/ranch-hand/internal/plan"
@@ -48,6 +49,7 @@ type operationRunner interface {
 type installationReader interface {
 	Installations() ([]lifecycle.InstallationRecord, error)
 	Backups(string) ([]lifecycle.BackupRecord, error)
+	Active(string) (lifecycle.Journal, error)
 }
 
 type Server struct {
@@ -112,9 +114,24 @@ func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, 
 	mux.Handle("POST /api/v1/operations/run", s.authorize(http.HandlerFunc(s.runOperation)))
 	mux.Handle("GET /api/v1/installations", s.authorize(http.HandlerFunc(s.listInstallations)))
 	mux.Handle("GET /api/v1/installations/{deploymentID}/backups", s.authorize(http.HandlerFunc(s.listBackups)))
+	mux.Handle("GET /api/v1/diagnostics", s.authorize(http.HandlerFunc(s.exportDiagnostics)))
 	mux.Handle("POST /api/v1/releases/verify", s.authorize(http.HandlerFunc(s.verifyRelease)))
 	mux.Handle("/", s.spa())
 	return s.securityHeaders(mux)
+}
+
+func (s *Server) exportDiagnostics(w http.ResponseWriter, _ *http.Request) {
+	if s.installations == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "redacted diagnostics are unavailable"})
+		return
+	}
+	snapshot, err := (diagnostics.Collector{}).Collect(s.version, s.installations)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "collect redacted diagnostics: " + err.Error()})
+		return
+	}
+	w.Header().Set("Content-Disposition", `attachment; filename="ranch-hand-diagnostics.json"`)
+	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (s *Server) listBackups(w http.ResponseWriter, r *http.Request) {

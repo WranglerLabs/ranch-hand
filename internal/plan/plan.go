@@ -40,6 +40,7 @@ var supportedTargets = map[string]bool{
 	"azure-container-apps": true,
 	"cloudflare":           true,
 	"local-compose":        true,
+	"local-wsl-compose":    true,
 	"remote-linux-compose": true,
 }
 
@@ -49,6 +50,7 @@ var (
 	namePattern               = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,119}$`)
 	keyPattern                = regexp.MustCompile(`^[a-z][A-Za-z0-9]{0,63}$`)
 	dockerProjectPattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+	wslDistributionPattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	azureSubscriptionPattern  = regexp.MustCompile(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
 	azureResourceGroupPattern = regexp.MustCompile(`^[A-Za-z0-9._()-]{1,90}$`)
 	azureLocationPattern      = regexp.MustCompile(`^[a-z0-9]{2,32}$`)
@@ -73,6 +75,9 @@ var configurationFields = map[string]map[string]bool{
 	},
 	"local-compose": {
 		"projectName": true, "dataVolume": true, "listenAddress": true,
+	},
+	"local-wsl-compose": {
+		"distribution": true, "projectName": true,
 	},
 	"remote-linux-compose": {
 		"host": true, "port": true, "user": true, "installDirectory": true,
@@ -210,6 +215,14 @@ func (p DeploymentPlan) Validate() error {
 		port, err := strconv.Atoi(listen)
 		if err != nil || listen == p.Configuration["listenAddress"] || port < 1024 || port > 65535 {
 			return errors.New("local-compose listenAddress must use 127.0.0.1 and a port from 1024 through 65535")
+		}
+	}
+	if p.Target.Kind == "local-wsl-compose" {
+		if !wslDistributionPattern.MatchString(p.Configuration["distribution"]) {
+			return errors.New("local-wsl-compose distribution must identify an installed WSL distribution")
+		}
+		if !dockerProjectPattern.MatchString(p.Configuration["projectName"]) {
+			return errors.New("local-wsl-compose projectName must use lowercase letters, numbers, underscore, or hyphen")
 		}
 	}
 	if p.Target.Kind == "azure-container-apps" {

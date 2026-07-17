@@ -1,7 +1,7 @@
 {
   "name": "ranch-hand",
   "private": true,
-  "version": "0.1.0-rc.2",
+  "version": "0.1.0-rc.3",
   "description": "Windows-first lifecycle manager for RepoWrangler",
   "license": "Apache-2.0",
   "packageManager": "pnpm@11.13.1",

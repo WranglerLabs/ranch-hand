@@ -2,7 +2,7 @@
 
 Ranch Hand is the standalone, Windows-first lifecycle manager for [RepoWrangler](https://github.com/WranglerLabs/repo-wrangler). It is for operators who want to install and manage RepoWrangler without cloning or forking its source repository. Contributors and advanced operators can still use RepoWrangler's documented deployment recipes directly.
 
-> **Status: Public Preview.** [`v0.1.0-rc.2`](docs/releases/v0.1.0-rc.2.md)
+> **Status: Public Preview.** [`v0.1.0-rc.3`](docs/releases/v0.1.0-rc.3.md)
 > is the primary recommended Windows deployment path for RepoWrangler. It is
 > publicly downloadable and functional, but it is unsigned and not production
 > supported or generally available. See the complete [GA readiness
@@ -37,7 +37,8 @@ Additional guides: [security model](docs/security-model.md) ·
 - Validate its version, SHA-256 digest, size, compatibility, SBOM, and attestation.
 - Create a versioned, secret-free deployment plan.
 - Preflight, dry run, install, backup-first update/restore/rollback/repair, verify, export, and produce redacted diagnostics.
-- Target Azure Container Apps, Cloudflare, local Docker Compose, or remote Linux Docker Compose over SSH.
+- Target local Docker Compose inside WSL, local Docker Desktop, remote Linux
+  Docker Compose over SSH, Cloudflare, or Azure Container Apps.
 
 Ranch Hand is optional. It is not a RepoWrangler feature screen, does not change RepoWrangler's read-only provider model, and does not require a Ranch Hand-managed deployment.
 
@@ -59,9 +60,22 @@ After a release is verified, the local interface creates a canonical JSON deploy
 
 Preflight revalidates the plan and rehashes the cached artifact before reporting it ready. Dry run describes the native target operations in order and reports `mutated: false`; it does not authenticate, contact the target control plane, or change infrastructure. Live control-plane checks and apply operations belong to the deployment-adapter implementation.
 
-## Local Docker evaluation install
+## Local WSL Docker Compose evaluation install
 
-After the exact plan passes live Docker preflight and its verified bundle is safely staged, Ranch Hand can install the local Compose profile as a single loopback-only evaluation container. It talks directly to the Docker Engine API, pulls the manifest's digest-pinned RepoWrangler image, creates or verifies an ownership-labeled persistent Docker volume, labels the container with its Ranch Hand deployment identity, starts it, and verifies `/health/ready` through a fixed loopback-only client. No host filesystem path, repository clone, Docker CLI, shell, proxy, or public ingress is involved.
+The WSL target detects ordinary installed WSL2 distributions and runs the
+verified published Compose bundle inside the selected distribution. It requires
+Docker Engine and Docker Compose v2 inside WSL, but does not require Docker
+Desktop, SSH, a WSL IP address, or an operator-supplied filesystem path. Ranch
+Hand uses the WSL user's home directory for its ownership-marked deployment
+files, creates the Docker-managed `repo-wrangler-data` volume, binds
+`127.0.0.1:8080`, and verifies the exact release from Windows.
+
+This Preview supports a new WSL evaluation install. WSL backup, update, restore,
+rollback, repair, and uninstall remain open lifecycle work.
+
+## Local Docker Desktop evaluation install
+
+After the exact plan passes live Docker preflight and its verified bundle is safely staged, Ranch Hand can install the Docker Desktop profile as a single loopback-only evaluation container. It talks directly to Docker Desktop's Windows-exposed Docker Engine API, pulls the manifest's digest-pinned RepoWrangler image, creates or verifies an ownership-labeled persistent Docker volume, labels the container with its Ranch Hand deployment identity, starts it, and verifies `/health/ready` through a fixed loopback-only client. No host filesystem path, repository clone, Docker CLI, shell, proxy, or public ingress is involved.
 
 The interface requires an explicit confirmation and describes the current boundary before mutation. This path enables demo mode, SQLite, and GitHub authentication; it is not a production configuration. A partially failed install can remove only the exact container carrying Ranch Hand's matching ownership labels. Ranch Hand refuses to replace or recover an unowned container with the selected name.
 
@@ -107,7 +121,8 @@ The interface can run a separate live connectivity preflight after the offline c
 |---|---|---|
 | Azure Container Apps | Azure Resource Manager HTTPS API | Subscription access, `Microsoft.App` registration, and Azure-managed HTTPS contract |
 | Cloudflare | Cloudflare HTTPS API | Token and account access, workers.dev, and unused dedicated Worker/D1 names |
-| Local Docker Compose | Docker Engine API over the Windows named pipe or Unix socket | Engine health, API version, Linux-container mode, and loopback bundle contract |
+| Local Docker Compose — WSL | `wsl.exe` into the selected distribution | Installed distribution, running Linux Docker Engine, Compose v2, unused project/directory, and Windows-loopback contract |
+| Local Docker Desktop | Docker Engine API over the Windows named pipe | Engine health, API version, Linux-container mode, and loopback bundle contract |
 | Remote Linux Compose | Embedded Go SSH client | Pinned host identity, Linux Docker/Compose, unused project, and dedicated directory |
 
 These checks do not shell out to Azure CLI, Wrangler CLI, a local Docker CLI, or OpenSSH. Azure and Cloudflare bearer tokens and SSH key/password material are submitted only to the loopback API, are never added to the plan or response, and are cleared from the form after each attempt. The current Azure preflight accepts a temporary ARM access token; integrated interactive Azure authentication remains part of the adapter work before GA.
@@ -128,7 +143,7 @@ Every committed install and version-changing operation also advances a validated
 
 The Windows interface can export a versioned redacted diagnostics JSON snapshot. It includes lifecycle phases, immutable versions, timestamps, target families, an export-scoped deployment pseudonym, random operation/backup IDs, and safe integrity hashes. It explicitly excludes stable deployment IDs, plans and their deterministic digests, configuration values, backup locators, URLs, hostnames, domains, account/resource identifiers, credentials, environment variables, request bodies, and arbitrary logs. Collection fails closed rather than silently skipping corrupt lifecycle state. See [ADR-0008](docs/adr/0008-redacted-diagnostics-boundary.md).
 
-The coordinator implements install, backup, and backup-first update/restore/rollback/repair sequencing. It binds `backup-complete` to an exact validated safety-backup record, binds historical restore input to a separate inventory record, stages only the verified plan artifact, and automatically enters recovery if apply, health verification, or the post-apply journal write fails. Recovery receives a cancellation-independent bounded context so a closed browser request cannot abandon a partially mutated target. All four initial targets are wired for the bounded evaluation installs above; local Docker also supports consistent backup and copy-on-write update, restore, rollback, and repair. Uninstall and the remaining target lifecycle mutations remain disabled. See [ADR-0002](docs/adr/0002-durable-lifecycle-transactions.md) for phase rules, recovery semantics, and trade-offs.
+The coordinator implements install, backup, and backup-first update/restore/rollback/repair sequencing. It binds `backup-complete` to an exact validated safety-backup record, binds historical restore input to a separate inventory record, stages only the verified plan artifact, and automatically enters recovery if apply, health verification, or the post-apply journal write fails. Recovery receives a cancellation-independent bounded context so a closed browser request cannot abandon a partially mutated target. All five initial targets are wired for the bounded evaluation installs above; local Docker Desktop also supports consistent backup and copy-on-write update, restore, rollback, and repair. Uninstall and the remaining target lifecycle mutations remain disabled. See [ADR-0002](docs/adr/0002-durable-lifecycle-transactions.md) for phase rules, recovery semantics, and trade-offs.
 
 ## Build from source
 

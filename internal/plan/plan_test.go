@@ -129,3 +129,19 @@ func TestRejectsUnsafeLocalComposeInputs(t *testing.T) {
 		t.Fatal("unsafe local Compose inputs were accepted")
 	}
 }
+
+func TestValidatesLocalWSLComposeTarget(t *testing.T) {
+	var candidate DeploymentPlan
+	if err := json.Unmarshal([]byte(validPlan), &candidate); err != nil {
+		t.Fatal(err)
+	}
+	candidate.Target.Kind = "local-wsl-compose"
+	candidate.Configuration = map[string]string{"distribution": "Ubuntu-26.04", "projectName": "repo-wrangler"}
+	if err := candidate.Validate(); err != nil {
+		t.Fatalf("valid WSL Compose target rejected: %v", err)
+	}
+	candidate.Configuration["distribution"] = "Ubuntu\nattacker"
+	if err := candidate.Validate(); err == nil {
+		t.Fatal("unsafe WSL distribution was accepted")
+	}
+}

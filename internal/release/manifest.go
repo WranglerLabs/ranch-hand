@@ -21,6 +21,7 @@ var (
 		"azure-container-apps": true,
 		"cloudflare":           true,
 		"local-compose":        true,
+		"local-wsl-compose":    true,
 		"remote-linux-compose": true,
 	}
 )
@@ -55,6 +56,14 @@ func ValidateTarget(value string) error {
 		return fmt.Errorf("unsupported target %q", value)
 	}
 	return nil
+}
+
+// ArtifactTarget maps an operator target to its published artifact family.
+func ArtifactTarget(value string) string {
+	if value == "local-wsl-compose" {
+		return "local-compose"
+	}
+	return value
 }
 
 func (m Manifest) Validate(expectedVersion string, validateURL func(string) error) error {

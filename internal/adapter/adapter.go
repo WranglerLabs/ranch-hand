@@ -62,6 +62,7 @@ func NewRegistry() *Registry {
 		"azure-container-apps": NewAzureContainerApps(),
 		"cloudflare":           NewCloudflare(),
 		"local-compose":        NewLocalDocker(),
+		"local-wsl-compose":    NewWSLCompose(),
 		"remote-linux-compose": NewRemoteLinuxCompose(),
 	}}
 }

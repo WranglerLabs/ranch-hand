@@ -6,12 +6,12 @@ Ranch Hand is the standalone, Windows-first lifecycle manager for [RepoWrangler]
 
 ## Start here
 
-- **Evaluate the current Windows candidate:** follow the
-  [operator guide](docs/operator-guide.md) to download the temporary artifact,
-  verify it, launch it, and complete a supported evaluation deployment.
-- **Wait for a normal public download:** no signed Ranch Hand GitHub Release or
-  Windows installer is published yet. The first stable release remains gated on
-  Authenticode signing and clean-Windows/real-target UAT.
+- **Evaluate the current Windows candidate:** use the public
+  [Ranch Hand for Windows guide](https://wranglerlabs.org/ranch-hand) to download
+  the stable unsigned prerelease asset, verify it, launch it, and complete a
+  supported evaluation deployment. A GitHub account is not required.
+- **Wait for the signed GA installer:** the first signed stable release remains
+  gated on Authenticode signing and clean-Windows/real-target UAT.
 - **Deploy without Ranch Hand:** clone or fork
   [RepoWrangler](https://github.com/WranglerLabs/repo-wrangler) and use its
   documented Docker, Cloudflare, Azure Container Apps, or Kubernetes recipes.
@@ -126,7 +126,12 @@ The coordinator implements install, backup, and backup-first update/restore/roll
 
 ## Build from source
 
-Building is for contributors. The current release-candidate workflow produces a versioned unsigned Windows executable, SHA-256 file, SPDX SBOM, and GitHub build-provenance attestation as a short-lived workflow artifact. It cannot publish a GitHub Release. A later explicitly authorized signing workflow will produce the first trusted downloadable release.
+Building is for contributors. The current release-candidate workflow produces a
+versioned unsigned Windows executable, SHA-256 file, SPDX SBOM, and GitHub
+build-provenance attestation as a short-lived workflow artifact. It cannot
+publish automatically. After verification, a maintainer can promote the exact
+bytes to an immutable unsigned prerelease; a later signing workflow will produce
+the first trusted GA installer.
 
 Requirements: Go 1.26+, Node.js 20+, and Corepack.
 

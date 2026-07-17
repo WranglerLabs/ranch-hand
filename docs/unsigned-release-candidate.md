@@ -11,7 +11,17 @@ The `Unsigned release candidate` workflow runs only by explicit manual dispatch 
 - an SPDX JSON SBOM generated from the executable
 - GitHub build-provenance attestations for the executable and SBOM
 
-The workflow has read-only repository-content permission, uploads a workflow artifact retained for 30 days, and has no tag trigger or GitHub Release upload step. It cannot be mistaken for the future trusted distribution workflow.
+The workflow has read-only repository-content permission, uploads a workflow
+artifact retained for 30 days, and has no tag trigger or GitHub Release upload
+step. It cannot publish anything automatically or be mistaken for the future
+trusted distribution workflow.
+
+After the recorded build, hash, provenance, launch, and independent verification
+checks pass, a maintainer may explicitly promote those exact bytes as immutable
+GitHub **prerelease** assets. The public Wrangler Labs documentation provides the
+end-user download route and preserves the unsigned evaluation warning. Manual
+promotion never changes the candidate into a signed or generally available
+release.
 
 ## Operator expectations
 

@@ -38,12 +38,19 @@ func TestAzureContainerAppsUsesARMAndRequiresRegisteredProvider(t *testing.T) {
 			_, _ = io.WriteString(w, `{"registrationState":"Registered"}`)
 			return
 		}
+		if strings.Contains(strings.ToLower(r.URL.Path), "/resourcegroups/") {
+			http.Error(w, "missing", http.StatusNotFound)
+			return
+		}
 		_, _ = io.WriteString(w, `{"id":"subscription","state":"Enabled"}`)
 	}))
 	defer server.Close()
 	adapter := newAzureContainerApps(server.Client(), server.URL)
-	report := adapter.Preflight(context.Background(), targetPlan("azure-container-apps", map[string]string{"subscriptionId": "sub"}), Credentials{AzureAccessToken: "azure-token"})
-	if !report.Ready || requests != 2 {
+	report := adapter.Preflight(context.Background(), targetPlan("azure-container-apps", map[string]string{
+		"subscriptionId": "00000000-0000-0000-0000-000000000000", "resourceGroup": "rg-ranch-hand", "location": "eastus",
+		"environmentName": "cae-ranch-hand", "appName": "repo-wrangler",
+	}), Credentials{AzureAccessToken: "azure-token"})
+	if !report.Ready || requests != 3 {
 		t.Fatalf("unexpected ARM preflight: %+v; requests=%d", report, requests)
 	}
 }

@@ -23,6 +23,18 @@ func TestDecodeAndValidate(t *testing.T) {
 	}
 }
 
+func TestRejectsInvalidAzureTargetIdentifiers(t *testing.T) {
+	var candidate DeploymentPlan
+	if err := json.Unmarshal([]byte(validPlan), &candidate); err != nil {
+		t.Fatal(err)
+	}
+	candidate.Configuration["subscriptionId"] = "not-a-subscription"
+	candidate.Configuration["appName"] = "Invalid App"
+	if err := candidate.Validate(); err == nil {
+		t.Fatal("invalid Azure subscription and Container App names were accepted")
+	}
+}
+
 func TestRejectsSecretsAtAnyDepth(t *testing.T) {
 	data := []byte(`{"schemaVersion":"1.0","name":"bad","release":{"version":"v1.0.8","manifestUrl":"https://example.test/manifest.json","manifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifactSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","artifactSize":42},"target":{"kind":"cloudflare"},"configuration":{"nested":{"apiToken":"nope"}}}`)
 	if _, err := DecodeAndValidate(data); err == nil {

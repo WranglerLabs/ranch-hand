@@ -42,11 +42,15 @@ var supportedTargets = map[string]bool{
 }
 
 var (
-	versionPattern       = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$`)
-	digestPattern        = regexp.MustCompile(`^[a-f0-9]{64}$`)
-	namePattern          = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,119}$`)
-	keyPattern           = regexp.MustCompile(`^[a-z][A-Za-z0-9]{0,63}$`)
-	dockerProjectPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+	versionPattern            = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$`)
+	digestPattern             = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	namePattern               = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,119}$`)
+	keyPattern                = regexp.MustCompile(`^[a-z][A-Za-z0-9]{0,63}$`)
+	dockerProjectPattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+	azureSubscriptionPattern  = regexp.MustCompile(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
+	azureResourceGroupPattern = regexp.MustCompile(`^[A-Za-z0-9._()-]{1,90}$`)
+	azureLocationPattern      = regexp.MustCompile(`^[a-z0-9]{2,32}$`)
+	containerAppNamePattern   = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}[a-z0-9]$`)
 )
 
 var configurationFields = map[string]map[string]bool{
@@ -197,6 +201,20 @@ func (p DeploymentPlan) Validate() error {
 		port, err := strconv.Atoi(listen)
 		if err != nil || listen == p.Configuration["listenAddress"] || port < 1024 || port > 65535 {
 			return errors.New("local-compose listenAddress must use 127.0.0.1 and a port from 1024 through 65535")
+		}
+	}
+	if p.Target.Kind == "azure-container-apps" {
+		if !azureSubscriptionPattern.MatchString(p.Configuration["subscriptionId"]) {
+			return errors.New("azure-container-apps subscriptionId must be an Azure subscription UUID")
+		}
+		if !azureResourceGroupPattern.MatchString(p.Configuration["resourceGroup"]) || strings.HasSuffix(p.Configuration["resourceGroup"], ".") {
+			return errors.New("azure-container-apps resourceGroup is invalid")
+		}
+		if !azureLocationPattern.MatchString(p.Configuration["location"]) {
+			return errors.New("azure-container-apps location must be a canonical Azure region name")
+		}
+		if !containerAppNamePattern.MatchString(p.Configuration["environmentName"]) || !containerAppNamePattern.MatchString(p.Configuration["appName"]) {
+			return errors.New("Azure Container Apps names must use 3-32 lowercase letters, numbers, or hyphens")
 		}
 	}
 	return nil

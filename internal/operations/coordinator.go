@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/WranglerLabs/ranch-hand/internal/adapter"
 	"github.com/WranglerLabs/ranch-hand/internal/bundle"
@@ -181,6 +182,8 @@ func artifactMatchesPlan(artifact productrelease.VerifiedArtifact, candidate pla
 }
 
 func (c *Coordinator) recover(ctx context.Context, request Request, mutator Mutator, result Result, operationErr error) (Result, error) {
+	recoveryContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 35*time.Minute)
+	defer cancel()
 	referenceID := ""
 	if result.Backup != nil {
 		referenceID = result.Backup.BackupID
@@ -193,7 +196,7 @@ func (c *Coordinator) recover(ctx context.Context, request Request, mutator Muta
 		return result, errors.Join(operationErr, transitionErr)
 	}
 	result.Journal = journal
-	if err := mutator.Recover(ctx, request.Kind, request.Plan, result.Backup, request.Credentials); err != nil {
+	if err := mutator.Recover(recoveryContext, request.Kind, request.Plan, result.Backup, request.Credentials); err != nil {
 		if failed, failErr := c.store.Transition(result.Journal.DeploymentID, result.Journal.OperationID, lifecycle.Failed); failErr == nil {
 			result.Journal = failed
 		}

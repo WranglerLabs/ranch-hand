@@ -70,7 +70,9 @@ func New(token, version string, ui fs.FS) http.Handler {
 	var coordinator operationRunner
 	if stageErr == nil && storeErr == nil {
 		localDocker := adapter.NewLocalDocker()
-		coordinator, _ = operations.NewCoordinator(store, stager, operations.NewRegistry(map[string]operations.Mutator{"local-compose": localDocker}))
+		coordinator, _ = operations.NewCoordinator(store, stager, operations.NewRegistry(map[string]operations.Mutator{
+			"local-compose": localDocker, "azure-container-apps": adapter.NewAzureContainerApps(),
+		}))
 	}
 	return newWithServices(token, version, ui, verifier, targets, stager, coordinator)
 }
@@ -124,8 +126,10 @@ func (s *Server) runOperation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer request.Credentials.Clear()
-	if request.Plan.Target.Kind != "local-compose" || (request.Kind != lifecycle.Install && request.Kind != lifecycle.Backup && request.Kind != lifecycle.Update) {
-		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "only local Docker install, backup, and update are enabled in this build; other mutators remain under implementation"})
+	localOperation := request.Plan.Target.Kind == "local-compose" && (request.Kind == lifecycle.Install || request.Kind == lifecycle.Backup || request.Kind == lifecycle.Update)
+	azureOperation := request.Plan.Target.Kind == "azure-container-apps" && request.Kind == lifecycle.Install
+	if !localOperation && !azureOperation {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "this target and lifecycle operation is not enabled in the current build"})
 		return
 	}
 	if err := request.Plan.Validate(); err != nil {
@@ -492,5 +496,5 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func DefaultHTTPServer(address string, handler http.Handler) *http.Server {
-	return &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 10 * time.Minute, IdleTimeout: 60 * time.Second}
+	return &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 70 * time.Minute, IdleTimeout: 60 * time.Second}
 }

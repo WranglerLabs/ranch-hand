@@ -3,6 +3,9 @@ package adapter
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +13,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"time"
@@ -19,12 +25,52 @@ import (
 	"github.com/WranglerLabs/ranch-hand/internal/plan"
 )
 
-const maximumDockerResponse = 64 << 20
+const (
+	maximumDockerResponse = 64 << 20
+	maximumLocalBackup    = int64(64 << 30)
+)
 
 var dockerProjectPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 
-func (d *LocalDocker) Backup(context.Context, plan.DeploymentPlan, Credentials) (lifecycle.BackupArtifact, error) {
-	return lifecycle.BackupArtifact{}, errors.New("local Docker backup is not implemented")
+func (d *LocalDocker) Backup(ctx context.Context, candidate plan.DeploymentPlan, _ Credentials) (artifact lifecycle.BackupArtifact, operationErr error) {
+	project, dataVolume, _, _, err := localDockerInputs(candidate)
+	if err != nil {
+		return artifact, err
+	}
+	deploymentID, err := lifecycle.DeploymentID(candidate)
+	if err != nil {
+		return artifact, err
+	}
+	exists, metadata, err := d.containerMetadata(ctx, project+"-server")
+	if err != nil {
+		return artifact, err
+	}
+	if !exists {
+		return artifact, errors.New("the Ranch Hand-managed local Docker container does not exist")
+	}
+	if err := verifyOwnership(metadata.Labels, deploymentID, "container"); err != nil {
+		return artifact, err
+	}
+	if err := d.verifyManagedVolume(ctx, dataVolume, deploymentID); err != nil {
+		return artifact, err
+	}
+	if metadata.Running {
+		if err := d.dockerJSON(ctx, http.MethodPost, "/containers/"+url.PathEscape(metadata.ID)+"/stop", url.Values{"t": []string{"30"}}, nil, http.StatusNoContent, nil); err != nil {
+			return artifact, fmt.Errorf("stop RepoWrangler for a consistent backup: %w", err)
+		}
+		defer func() {
+			restartContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Minute)
+			defer cancel()
+			restartErr := d.dockerJSON(restartContext, http.MethodPost, "/containers/"+url.PathEscape(metadata.ID)+"/start", nil, nil, http.StatusNoContent, nil)
+			if restartErr == nil {
+				restartErr = d.Verify(restartContext, candidate, Credentials{})
+			}
+			if restartErr != nil {
+				operationErr = errors.Join(operationErr, fmt.Errorf("restart RepoWrangler after backup: %w", restartErr))
+			}
+		}()
+	}
+	return d.archiveContainerData(ctx, metadata.ID)
 }
 
 func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, staged bundle.StagedBundle, _ Credentials) error {
@@ -43,7 +89,7 @@ func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, c
 		return errors.New("local Docker adapter requires a local-compose bundle")
 	}
 	containerName := project + "-server"
-	exists, _, _, err := d.containerMetadata(ctx, containerName)
+	exists, _, err := d.containerMetadata(ctx, containerName)
 	if err != nil {
 		return err
 	}
@@ -133,7 +179,7 @@ func (d *LocalDocker) Recover(ctx context.Context, kind lifecycle.OperationKind,
 		return errors.New("invalid local Docker project name")
 	}
 	containerName := project + "-server"
-	exists, containerID, labels, err := d.containerMetadata(ctx, containerName)
+	exists, metadata, err := d.containerMetadata(ctx, containerName)
 	if err != nil {
 		return err
 	}
@@ -144,13 +190,19 @@ func (d *LocalDocker) Recover(ctx context.Context, kind lifecycle.OperationKind,
 	if err != nil {
 		return err
 	}
-	if labels["com.wranglerlabs.ranch-hand.managed"] != "true" || labels["com.wranglerlabs.ranch-hand.deployment"] != deploymentID {
-		return errors.New("refusing to remove a Docker container that is not owned by this Ranch Hand deployment")
+	if err := verifyOwnership(metadata.Labels, deploymentID, "container"); err != nil {
+		return err
 	}
-	return d.dockerJSON(ctx, http.MethodDelete, "/containers/"+url.PathEscape(containerID), url.Values{"force": []string{"1"}, "v": []string{"1"}}, nil, http.StatusNoContent, nil)
+	return d.dockerJSON(ctx, http.MethodDelete, "/containers/"+url.PathEscape(metadata.ID), url.Values{"force": []string{"1"}, "v": []string{"1"}}, nil, http.StatusNoContent, nil)
 }
 
 var errDockerNotFound = errors.New("Docker resource not found")
+
+type dockerContainer struct {
+	ID      string
+	Labels  map[string]string
+	Running bool
+}
 
 func (d *LocalDocker) ensureManagedVolume(ctx context.Context, name, deploymentID string) error {
 	var details struct {
@@ -175,24 +227,144 @@ func (d *LocalDocker) ensureManagedVolume(ctx context.Context, name, deploymentI
 	return nil
 }
 
-func (d *LocalDocker) containerMetadata(ctx context.Context, name string) (bool, string, map[string]string, error) {
+func (d *LocalDocker) verifyManagedVolume(ctx context.Context, name, deploymentID string) error {
+	var details struct {
+		Labels map[string]string `json:"Labels"`
+	}
+	if err := d.dockerJSON(ctx, http.MethodGet, "/volumes/"+url.PathEscape(name), nil, nil, http.StatusOK, &details); err != nil {
+		if errors.Is(err, errDockerNotFound) {
+			return errors.New("the Ranch Hand-managed Docker data volume does not exist")
+		}
+		return err
+	}
+	return verifyOwnership(details.Labels, deploymentID, "volume")
+}
+
+func verifyOwnership(labels map[string]string, deploymentID, resource string) error {
+	if labels["com.wranglerlabs.ranch-hand.managed"] != "true" || labels["com.wranglerlabs.ranch-hand.deployment"] != deploymentID {
+		return fmt.Errorf("refusing to use a Docker %s that is not owned by this Ranch Hand deployment", resource)
+	}
+	return nil
+}
+
+func (d *LocalDocker) containerMetadata(ctx context.Context, name string) (bool, dockerContainer, error) {
 	var details struct {
 		ID     string `json:"Id"`
 		Config struct {
 			Labels map[string]string `json:"Labels"`
 		} `json:"Config"`
+		State struct {
+			Running bool `json:"Running"`
+		} `json:"State"`
 	}
 	err := d.dockerJSON(ctx, http.MethodGet, "/containers/"+url.PathEscape(name)+"/json", nil, nil, http.StatusOK, &details)
 	if errors.Is(err, errDockerNotFound) {
-		return false, "", nil, nil
+		return false, dockerContainer{}, nil
 	}
 	if err != nil {
-		return false, "", nil, err
+		return false, dockerContainer{}, err
 	}
 	if details.ID == "" {
-		return false, "", nil, errors.New("Docker Engine returned a container without an identity")
+		return false, dockerContainer{}, errors.New("Docker Engine returned a container without an identity")
 	}
-	return true, details.ID, details.Config.Labels, nil
+	return true, dockerContainer{ID: details.ID, Labels: details.Config.Labels, Running: details.State.Running}, nil
+}
+
+func (d *LocalDocker) archiveContainerData(ctx context.Context, containerID string) (artifact lifecycle.BackupArtifact, operationErr error) {
+	response, err := d.dockerRequest(ctx, http.MethodGet, "/containers/"+url.PathEscape(containerID)+"/archive", url.Values{"path": []string{"/app/data"}}, nil)
+	if err != nil {
+		return artifact, fmt.Errorf("request RepoWrangler data archive: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+		return artifact, fmt.Errorf("Docker Engine data archive returned HTTP %d", response.StatusCode)
+	}
+	rootPath, err := d.localBackupRoot()
+	if err != nil {
+		return artifact, err
+	}
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return artifact, fmt.Errorf("open Ranch Hand backup root: %w", err)
+	}
+	defer root.Close()
+	if err := root.MkdirAll("backups", 0o700); err != nil {
+		return artifact, fmt.Errorf("create Ranch Hand backup directory: %w", err)
+	}
+	token, err := randomBackupToken()
+	if err != nil {
+		return artifact, err
+	}
+	temporaryName := path.Join("backups", token+".partial")
+	archiveName := path.Join("backups", token+".tar")
+	file, err := root.OpenFile(temporaryName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return artifact, fmt.Errorf("create local backup archive: %w", err)
+	}
+	committed := false
+	defer func() {
+		_ = file.Close()
+		if !committed {
+			_ = root.Remove(temporaryName)
+		}
+	}()
+	hasher := sha256.New()
+	written, copyErr := io.Copy(io.MultiWriter(file, hasher), io.LimitReader(response.Body, maximumLocalBackup+1))
+	if copyErr != nil {
+		return artifact, fmt.Errorf("write local backup archive: %w", copyErr)
+	}
+	if written > maximumLocalBackup {
+		return artifact, errors.New("local Docker backup exceeded the 64 GiB safety limit")
+	}
+	if written == 0 {
+		return artifact, errors.New("Docker Engine returned an empty data archive")
+	}
+	if err := file.Sync(); err != nil {
+		return artifact, fmt.Errorf("sync local backup archive: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return artifact, fmt.Errorf("close local backup archive: %w", err)
+	}
+	if err := root.Rename(temporaryName, archiveName); err != nil {
+		return artifact, fmt.Errorf("commit local backup archive: %w", err)
+	}
+	committed = true
+	return lifecycle.BackupArtifact{
+		Kind: lifecycle.LocalArchive, Locator: archiveName,
+		Size: written, SHA256: hex.EncodeToString(hasher.Sum(nil)),
+	}, nil
+}
+
+func (d *LocalDocker) localBackupRoot() (string, error) {
+	rootPath := d.backupRoot
+	if rootPath == "" {
+		base, err := os.UserConfigDir()
+		if err != nil {
+			return "", fmt.Errorf("locate user configuration for backups: %w", err)
+		}
+		rootPath = filepath.Join(base, "WranglerLabs", "Ranch Hand")
+	}
+	absolute, err := filepath.Abs(rootPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve local backup root: %w", err)
+	}
+	if err := os.MkdirAll(absolute, 0o700); err != nil {
+		return "", fmt.Errorf("create local backup root: %w", err)
+	}
+	physical, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", fmt.Errorf("resolve physical backup root: %w", err)
+	}
+	return filepath.Clean(physical), nil
+}
+
+func randomBackupToken() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", fmt.Errorf("create backup identity: %w", err)
+	}
+	return hex.EncodeToString(value), nil
 }
 
 func (d *LocalDocker) pullImage(ctx context.Context, image string) error {

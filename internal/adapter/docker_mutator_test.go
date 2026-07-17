@@ -2,6 +2,8 @@ package adapter
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -152,7 +154,94 @@ func TestLocalDockerRejectsTrailingJSON(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := &LocalDocker{client: server.Client(), baseURL: server.URL}
-	if _, _, _, err := adapter.containerMetadata(context.Background(), "repo-wrangler-server"); err == nil {
+	if _, _, err := adapter.containerMetadata(context.Background(), "repo-wrangler-server"); err == nil {
 		t.Fatal("Docker response with trailing JSON was accepted")
+	}
+}
+
+func TestLocalDockerBackupStopsArchivesRestartsAndVerifies(t *testing.T) {
+	candidate := localInstallPlan()
+	deploymentID, err := lifecycle.DeploymentID(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labels := map[string]string{"com.wranglerlabs.ranch-hand.managed": "true", "com.wranglerlabs.ranch-hand.deployment": deploymentID}
+	var stopped, restarted, archived bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/repo-wrangler-server/json":
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "owned-id", "Config": map[string]any{"Labels": labels}, "State": map[string]any{"Running": true}})
+		case r.Method == http.MethodGet && r.URL.Path == "/volumes/repo-wrangler-data":
+			_ = json.NewEncoder(w).Encode(map[string]any{"Labels": labels})
+		case r.Method == http.MethodPost && r.URL.Path == "/containers/owned-id/stop":
+			stopped = true
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/owned-id/archive":
+			if !stopped || r.URL.Query().Get("path") != "/app/data" {
+				t.Fatal("backup archive was requested without a consistent stop or fixed data path")
+			}
+			archived = true
+			_, _ = io.WriteString(w, "deterministic-docker-tar")
+		case r.Method == http.MethodPost && r.URL.Path == "/containers/owned-id/start":
+			restarted = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected Docker request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+	backupRoot := t.TempDir()
+	adapter := &LocalDocker{
+		client: server.Client(), baseURL: server.URL, backupRoot: backupRoot,
+		healthClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok")), Header: make(http.Header)}, nil
+		})},
+	}
+	artifact, err := adapter.Backup(context.Background(), candidate, Credentials{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stopped || !archived || !restarted {
+		t.Fatalf("backup lifecycle incomplete: stop=%t archive=%t restart=%t", stopped, archived, restarted)
+	}
+	if err := artifact.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	expectedDigest := sha256.Sum256([]byte("deterministic-docker-tar"))
+	if artifact.SHA256 != hex.EncodeToString(expectedDigest[:]) || artifact.Size != int64(len("deterministic-docker-tar")) {
+		t.Fatal("backup artifact integrity metadata does not match the archive")
+	}
+	contents, err := os.ReadFile(filepath.Join(backupRoot, filepath.FromSlash(artifact.Locator)))
+	if err != nil || string(contents) != "deterministic-docker-tar" {
+		t.Fatalf("backup archive was not committed: %v", err)
+	}
+}
+
+func TestLocalDockerBackupRefusesUnownedVolumeBeforeStopping(t *testing.T) {
+	candidate := localInstallPlan()
+	deploymentID, err := lifecycle.DeploymentID(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/containers/repo-wrangler-server/json":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"Id": "owned-id",
+				"Config": map[string]any{"Labels": map[string]string{
+					"com.wranglerlabs.ranch-hand.managed": "true", "com.wranglerlabs.ranch-hand.deployment": deploymentID,
+				}},
+				"State": map[string]any{"Running": true},
+			})
+		case "/volumes/repo-wrangler-data":
+			_ = json.NewEncoder(w).Encode(map[string]any{"Labels": map[string]string{}})
+		default:
+			t.Fatalf("backup mutated Docker after finding an unowned volume: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	adapter := &LocalDocker{client: server.Client(), baseURL: server.URL, backupRoot: t.TempDir()}
+	if _, err := adapter.Backup(context.Background(), candidate, Credentials{}); err == nil {
+		t.Fatal("backup accepted an unowned data volume")
 	}
 }

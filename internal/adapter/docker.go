@@ -16,6 +16,7 @@ type LocalDocker struct {
 	client       *http.Client
 	baseURL      string
 	healthClient *http.Client
+	backupRoot   string
 }
 
 func NewLocalDocker() *LocalDocker {

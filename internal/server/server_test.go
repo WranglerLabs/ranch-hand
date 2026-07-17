@@ -135,6 +135,11 @@ func TestCreateExportPreflightAndDryRunVerifiedPlan(t *testing.T) {
 	if runner.request.Kind != lifecycle.Install || runner.request.Artifact.SHA256 == "" {
 		t.Fatal("coordinator did not receive verified local install request")
 	}
+	backupBody := `{"kind":"backup","fromVersion":"v1.2.3","plan":` + string(created.Plan) + `,"credentials":{}}`
+	response = authorizedPost(h, "/api/v1/operations/run", backupBody)
+	if response.Code != http.StatusOK || runner.request.Kind != lifecycle.Backup || runner.request.FromVersion != "v1.2.3" {
+		t.Fatalf("backup operation was not routed to the coordinator: %d %s", response.Code, response.Body.String())
+	}
 }
 
 func authorizedPost(h http.Handler, path, body string) *httptest.ResponseRecorder {

@@ -35,7 +35,7 @@ type PreflightReport = { ready: boolean; checks: { name: string; ok: boolean; me
 type DryRunReport = { mutated: boolean; steps: { order: number; description: string; mutates: boolean }[] };
 type TargetReport = { ready: boolean; target: string; checks: { name: string; ok: boolean; message: string }[] };
 type StagedBundle = { product: string; version: string; target: string; path: string; cacheHit: boolean };
-type OperationResult = { completed: boolean; operation: { journal: { phase: string } } };
+type OperationResult = { completed: boolean; operation: { journal: { phase: string }; backup?: { artifact: { locator: string; size: number; sha256: string } } } };
 
 const targetFields: Record<string, { key: string; label: string; placeholder: string; optional?: boolean }[]> = {
   "azure-container-apps": [
@@ -128,6 +128,7 @@ function App() {
   const [installConfirmed, setInstallConfirmed] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [operationResult, setOperationResult] = useState<OperationResult | null>(null);
+  const [operationKind, setOperationKind] = useState<"install" | "backup" | null>(null);
 
   useEffect(() => {
     if (!token) {
@@ -149,6 +150,7 @@ function App() {
     setStagedBundle(null);
     setInstallConfirmed(false);
     setOperationResult(null);
+    setOperationKind(null);
     try {
       const result = await api<{ verified: true; artifact: VerifiedArtifact }>("/api/v1/releases/verify", {
         method: "POST",
@@ -172,6 +174,7 @@ function App() {
     setStagedBundle(null);
     setInstallConfirmed(false);
     setOperationResult(null);
+    setOperationKind(null);
     try {
       const cleaned = Object.fromEntries(Object.entries(configuration).filter(([, value]) => value.trim() !== ""));
       const result = await api<{ plan: DeploymentPlan }>("/api/v1/plans/create", {
@@ -250,8 +253,26 @@ function App() {
         method: "POST",
         body: JSON.stringify({ kind: "install", plan: planResult, credentials: {} }),
       }));
+      setOperationKind("install");
     } catch (reason) {
       setPlanError(reason instanceof Error ? reason.message : "Local installation failed");
+    } finally {
+      setInstalling(false);
+    }
+  }
+
+  async function backupLocal() {
+    if (!planResult) return;
+    setInstalling(true);
+    setPlanError("");
+    try {
+      setOperationResult(await api<OperationResult>("/api/v1/operations/run", {
+        method: "POST",
+        body: JSON.stringify({ kind: "backup", fromVersion: planResult.release.version, plan: planResult, credentials: {} }),
+      }));
+      setOperationKind("backup");
+    } catch (reason) {
+      setPlanError(reason instanceof Error ? reason.message : "Local backup failed");
     } finally {
       setInstalling(false);
     }
@@ -276,7 +297,7 @@ function App() {
         <p>Choose an explicit release and deployment target. Ranch Hand downloads only the published bundle, verifies its declared size and SHA-256, and stores the verified bytes in its local versioned cache.</p>
         <form onSubmit={verifyRelease}>
           <label>Release version<input required pattern="v[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9.-]+)?" placeholder="v1.0.8" value={version} onChange={(event) => setVersion(event.target.value)} /></label>
-          <label>Deployment target<select value={target} onChange={(event) => { setTarget(event.target.value); setArtifact(null); setPlanResult(null); setConfiguration({}); setRuntimeCredentials({}); setTargetReport(null); setStagedBundle(null); setInstallConfirmed(false); setOperationResult(null); }}><option value="azure-container-apps">Azure Container Apps</option><option value="cloudflare">Cloudflare</option><option value="local-compose">Local Docker Compose</option><option value="remote-linux-compose">Remote Linux Compose</option></select></label>
+          <label>Deployment target<select value={target} onChange={(event) => { setTarget(event.target.value); setArtifact(null); setPlanResult(null); setConfiguration({}); setRuntimeCredentials({}); setTargetReport(null); setStagedBundle(null); setInstallConfirmed(false); setOperationResult(null); setOperationKind(null); }}><option value="azure-container-apps">Azure Container Apps</option><option value="cloudflare">Cloudflare</option><option value="local-compose">Local Docker Compose</option><option value="remote-linux-compose">Remote Linux Compose</option></select></label>
           <button type="submit" disabled={verifying || !token}>{verifying ? "Verifying and caching…" : "Verify and cache release"}</button>
         </form>
         {releaseError && <div className="inline-result error" role="alert"><strong>Release rejected</strong><p>{releaseError}</p></div>}
@@ -302,8 +323,9 @@ function App() {
           <button type="submit" disabled={targetRunning}>{targetRunning ? "Checking target…" : "Run live target preflight"}</button>
         </form>}
         {targetReport && <div className={`inline-result ${targetReport.ready ? "success" : "error"}`}><strong>{targetReport.ready ? "Target is ready" : "Target preflight blocked"}</strong><ul>{targetReport.checks.map((check) => <li key={check.name}>{check.ok ? "✓" : "✕"} {check.message}</li>)}</ul></div>}
-        {target === "local-compose" && targetReport?.ready && stagedBundle && !operationResult && <div className="inline-result install-panel"><strong>Install loopback evaluation instance</strong><p>This first mutator installs RepoWrangler in demo mode with SQLite, binds only to 127.0.0.1, and creates no proxy or public ingress. Production credentials and update/backup controls are not enabled in this build.</p><label className="confirmation"><input type="checkbox" checked={installConfirmed} onChange={(event) => setInstallConfirmed(event.target.checked)} /> I understand this is a local evaluation install.</label><button type="button" disabled={!installConfirmed || installing} onClick={installLocal}>{installing ? "Installing and verifying…" : "Install local evaluation"}</button></div>}
-        {operationResult && <div className="inline-result success"><strong>Local RepoWrangler installation committed</strong><p>The container passed its readiness check and the lifecycle journal is {operationResult.operation.journal.phase}. Open <a href={`http://${planResult?.configuration.listenAddress}`} target="_blank" rel="noreferrer">http://{planResult?.configuration.listenAddress}</a>.</p></div>}
+        {target === "local-compose" && targetReport?.ready && stagedBundle && !operationResult && <div className="inline-result install-panel"><strong>Install loopback evaluation instance</strong><p>This mutator installs RepoWrangler in demo mode with SQLite, binds only to 127.0.0.1, and creates no proxy or public ingress. Production credentials and update controls are not enabled in this build.</p><label className="confirmation"><input type="checkbox" checked={installConfirmed} onChange={(event) => setInstallConfirmed(event.target.checked)} /> I understand this is a local evaluation install.</label><button type="button" disabled={!installConfirmed || installing} onClick={installLocal}>{installing ? "Installing and verifying…" : "Install local evaluation"}</button></div>}
+        {operationResult && operationKind === "install" && <div className="inline-result success"><strong>Local RepoWrangler installation committed</strong><p>The container passed its readiness check and the lifecycle journal is {operationResult.operation.journal.phase}. Open <a href={`http://${planResult?.configuration.listenAddress}`} target="_blank" rel="noreferrer">http://{planResult?.configuration.listenAddress}</a>.</p><button type="button" className="secondary" disabled={installing} onClick={backupLocal}>{installing ? "Creating consistent backup…" : "Back up local data"}</button></div>}
+        {operationResult && operationKind === "backup" && <div className="inline-result success"><strong>Consistent local backup committed</strong><p>Ranch Hand archived the managed container's persistent data while preserving its original running or stopped state. A running container was restarted and readiness-verified. The lifecycle journal is {operationResult.operation.journal.phase}.</p>{operationResult.operation.backup && <dl><div><dt>Archive</dt><dd>{operationResult.operation.backup.artifact.locator}</dd></div><div><dt>Size</dt><dd>{operationResult.operation.backup.artifact.size.toLocaleString()} bytes</dd></div><div><dt>SHA-256</dt><dd className="digest">{operationResult.operation.backup.artifact.sha256}</dd></div></dl>}</div>}
       </section>}
       <section className="grid" aria-label="Initial deployment targets">
         {[

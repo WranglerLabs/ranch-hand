@@ -61,12 +61,12 @@ type cloudflareExpected struct {
 	Identity   bundle.Identity
 }
 
-func (c *Cloudflare) Backup(context.Context, plan.DeploymentPlan, Credentials) (lifecycle.BackupArtifact, error) {
+func (c *Cloudflare) Backup(context.Context, plan.DeploymentPlan, string, Credentials) (lifecycle.BackupArtifact, error) {
 	return lifecycle.BackupArtifact{}, errors.New("Cloudflare D1 backup is not implemented")
 }
 
-func (c *Cloudflare) Apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, staged bundle.StagedBundle, backup *lifecycle.BackupRecord, credentials Credentials) error {
-	if kind != lifecycle.Install || backup != nil {
+func (c *Cloudflare) Apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, _ string, staged bundle.StagedBundle, backups lifecycle.OperationBackups, credentials Credentials) error {
+	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return errors.New("the Cloudflare adapter currently supports only a new evaluation install")
 	}
 	if err := candidate.Validate(); err != nil {
@@ -634,8 +634,8 @@ func cloudflareHealthReady(ctx context.Context, client *http.Client, hostname, v
 	return true
 }
 
-func (c *Cloudflare) Recover(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, backup *lifecycle.BackupRecord, credentials Credentials) error {
-	if kind != lifecycle.Install || backup != nil {
+func (c *Cloudflare) Recover(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, _ string, backups lifecycle.OperationBackups, credentials Credentials) error {
+	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return errors.New("Cloudflare recovery currently supports only a failed new evaluation install")
 	}
 	if strings.TrimSpace(credentials.CloudflareAPIToken) == "" {

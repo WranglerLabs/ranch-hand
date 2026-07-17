@@ -23,12 +23,12 @@ const maximumARMTemplate = 16 << 20
 
 var containerAppsFQDNPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?\.azurecontainerapps\.io$`)
 
-func (a *AzureContainerApps) Backup(context.Context, plan.DeploymentPlan, Credentials) (lifecycle.BackupArtifact, error) {
+func (a *AzureContainerApps) Backup(context.Context, plan.DeploymentPlan, string, Credentials) (lifecycle.BackupArtifact, error) {
 	return lifecycle.BackupArtifact{}, errors.New("Azure Container Apps backup is not implemented")
 }
 
-func (a *AzureContainerApps) Apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, staged bundle.StagedBundle, backup *lifecycle.BackupRecord, credentials Credentials) error {
-	if kind != lifecycle.Install || backup != nil {
+func (a *AzureContainerApps) Apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, _ string, staged bundle.StagedBundle, backups lifecycle.OperationBackups, credentials Credentials) error {
+	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return errors.New("the Azure Container Apps adapter currently supports only a new evaluation install")
 	}
 	if err := credentials.Validate(); err != nil {
@@ -315,8 +315,8 @@ func azureHealthReady(ctx context.Context, client *http.Client, fqdn, expectedVe
 	return true
 }
 
-func (a *AzureContainerApps) Recover(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, backup *lifecycle.BackupRecord, credentials Credentials) error {
-	if kind != lifecycle.Install || backup != nil {
+func (a *AzureContainerApps) Recover(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, _ string, backups lifecycle.OperationBackups, credentials Credentials) error {
+	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return errors.New("Azure recovery currently supports only a failed new evaluation install")
 	}
 	if strings.TrimSpace(credentials.AzureAccessToken) == "" {

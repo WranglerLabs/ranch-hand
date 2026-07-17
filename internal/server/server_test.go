@@ -40,11 +40,16 @@ type fakeOperationRunner struct {
 
 type fakeInstallationReader struct {
 	records []lifecycle.InstallationRecord
+	backups []lifecycle.BackupRecord
 	err     error
 }
 
 func (f *fakeInstallationReader) Installations() ([]lifecycle.InstallationRecord, error) {
 	return f.records, f.err
+}
+
+func (f *fakeInstallationReader) Backups(string) ([]lifecycle.BackupRecord, error) {
+	return f.backups, f.err
 }
 
 func (f *fakeOperationRunner) Run(_ context.Context, request operations.Request) (operations.Result, error) {
@@ -154,6 +159,12 @@ func TestCreateExportPreflightAndDryRunVerifiedPlan(t *testing.T) {
 	if response.Code != http.StatusOK || runner.request.Kind != lifecycle.Update || runner.request.FromVersion != "v1.2.2" {
 		t.Fatalf("update operation was not routed to the coordinator: %d %s", response.Code, response.Body.String())
 	}
+	restoreID := strings.Repeat("c", 32)
+	restoreBody := `{"kind":"restore","fromVersion":"v1.2.3","backupId":"` + restoreID + `","plan":` + string(created.Plan) + `,"credentials":{}}`
+	response = authorizedPost(h, "/api/v1/operations/run", restoreBody)
+	if response.Code != http.StatusOK || runner.request.Kind != lifecycle.Restore || runner.request.BackupID != restoreID {
+		t.Fatalf("restore operation was not routed to the coordinator: %d %s", response.Code, response.Body.String())
+	}
 }
 
 func authorizedPost(h http.Handler, path, body string) *httptest.ResponseRecorder {
@@ -170,7 +181,7 @@ func TestListsInstallationRecords(t *testing.T) {
 	reader := &fakeInstallationReader{records: []lifecycle.InstallationRecord{{
 		DeploymentID: "0123456789abcdef01234567", Target: "local-compose",
 		State: lifecycle.InstallationActive, Version: "v1.2.3",
-	}}}
+	}}, backups: []lifecycle.BackupRecord{{BackupID: strings.Repeat("b", 32), Version: "v1.2.2"}}}
 	h := newWithServices("secret-token", "test", testUI(), nil, nil, nil, nil, reader)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/installations", nil)
 	request.Header.Set("Authorization", "Bearer secret-token")
@@ -178,6 +189,13 @@ func TestListsInstallationRecords(t *testing.T) {
 	h.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"version":"v1.2.3"`) || !strings.Contains(response.Body.String(), `"state":"active"`) {
 		t.Fatalf("installation inventory returned %d: %s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/installations/0123456789abcdef01234567/backups", nil)
+	request.Header.Set("Authorization", "Bearer secret-token")
+	response = httptest.NewRecorder()
+	h.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"version":"v1.2.2"`) {
+		t.Fatalf("backup inventory returned %d: %s", response.Code, response.Body.String())
 	}
 }
 

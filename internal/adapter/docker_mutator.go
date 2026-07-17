@@ -34,7 +34,7 @@ const (
 var dockerProjectPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 var localBackupLocatorPattern = regexp.MustCompile(`^backups/[a-f0-9]{32}\.tar$`)
 
-func (d *LocalDocker) Backup(ctx context.Context, candidate plan.DeploymentPlan, _ Credentials) (artifact lifecycle.BackupArtifact, operationErr error) {
+func (d *LocalDocker) Backup(ctx context.Context, candidate plan.DeploymentPlan, expectedVersion string, _ Credentials) (artifact lifecycle.BackupArtifact, operationErr error) {
 	project, _, _, _, err := localDockerInputs(candidate)
 	if err != nil {
 		return artifact, err
@@ -53,7 +53,7 @@ func (d *LocalDocker) Backup(ctx context.Context, candidate plan.DeploymentPlan,
 	if err := verifyOwnership(metadata.Labels, deploymentID, "container"); err != nil {
 		return artifact, err
 	}
-	if metadata.Labels["com.wranglerlabs.ranch-hand.version"] != candidate.Release.Version {
+	if metadata.Labels["com.wranglerlabs.ranch-hand.version"] != expectedVersion {
 		return artifact, errors.New("the managed container version does not match the backup plan")
 	}
 	if metadata.DataVolume == "" {
@@ -71,7 +71,7 @@ func (d *LocalDocker) Backup(ctx context.Context, candidate plan.DeploymentPlan,
 			defer cancel()
 			restartErr := d.dockerJSON(restartContext, http.MethodPost, "/containers/"+url.PathEscape(metadata.ID)+"/start", nil, nil, http.StatusNoContent, nil)
 			if restartErr == nil {
-				restartErr = d.Verify(restartContext, candidate, Credentials{})
+				restartErr = d.verifyVersion(restartContext, candidate, expectedVersion)
 			}
 			if restartErr != nil {
 				operationErr = errors.Join(operationErr, fmt.Errorf("restart RepoWrangler after backup: %w", restartErr))
@@ -81,7 +81,7 @@ func (d *LocalDocker) Backup(ctx context.Context, candidate plan.DeploymentPlan,
 	return d.archiveContainerData(ctx, metadata.ID)
 }
 
-func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, staged bundle.StagedBundle, backup *lifecycle.BackupRecord, _ Credentials) error {
+func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, fromVersion string, staged bundle.StagedBundle, backups lifecycle.OperationBackups, _ Credentials) error {
 	project, dataVolume, hostIP, hostPort, err := localDockerInputs(candidate)
 	if err != nil {
 		return err
@@ -97,10 +97,10 @@ func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, c
 	if err != nil {
 		return err
 	}
-	if kind == lifecycle.Update {
-		return d.applyUpdate(ctx, candidate, backup, identity.Image, deploymentID, project, hostIP, hostPort)
+	if kind == lifecycle.Update || kind == lifecycle.Restore || kind == lifecycle.Rollback {
+		return d.applyReplacement(ctx, kind, candidate, fromVersion, backups, identity.Image, deploymentID, project, hostIP, hostPort)
 	}
-	if kind != lifecycle.Install || backup != nil {
+	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return fmt.Errorf("local Docker %s is not implemented with the supplied lifecycle state", kind)
 	}
 	containerName := project + "-server"
@@ -154,14 +154,44 @@ func (d *LocalDocker) createContainer(ctx context.Context, candidate plan.Deploy
 	return created.ID, nil
 }
 
-func (d *LocalDocker) applyUpdate(ctx context.Context, candidate plan.DeploymentPlan, backup *lifecycle.BackupRecord, image, deploymentID, project, hostIP, hostPort string) error {
-	if backup == nil || backup.Target != "local-compose" || backup.DeploymentID != deploymentID || backup.Version == candidate.Release.Version {
-		return errors.New("local Docker update requires the exact prior-version backup for this deployment")
+func (d *LocalDocker) applyReplacement(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, fromVersion string, backups lifecycle.OperationBackups, image, deploymentID, project, hostIP, hostPort string) error {
+	safety := backups.Safety
+	if safety == nil || safety.Target != "local-compose" || safety.DeploymentID != deploymentID || safety.Version != fromVersion {
+		return fmt.Errorf("local Docker %s requires the exact fresh safety backup for the installed version", kind)
 	}
-	if err := backup.Validate(); err != nil {
-		return fmt.Errorf("validate local update backup: %w", err)
+	if err := safety.Validate(); err != nil {
+		return fmt.Errorf("validate local replacement safety backup: %w", err)
 	}
-	archive, err := d.openVerifiedBackup(*backup)
+	source := safety
+	switch kind {
+	case lifecycle.Update:
+		if backups.Selected != nil || fromVersion == candidate.Release.Version {
+			return errors.New("local Docker update requires a different target version and no selected restore backup")
+		}
+	case lifecycle.Restore:
+		source = backups.Selected
+		if source == nil || fromVersion != candidate.Release.Version {
+			return errors.New("local Docker restore requires a selected backup from the installed version")
+		}
+	case lifecycle.Rollback:
+		source = backups.Selected
+		if source == nil || fromVersion == candidate.Release.Version {
+			return errors.New("local Docker rollback requires a selected backup from a different target version")
+		}
+	default:
+		return fmt.Errorf("local Docker %s is not a replacement operation", kind)
+	}
+	expectedSourceVersion := candidate.Release.Version
+	if kind == lifecycle.Update {
+		expectedSourceVersion = fromVersion
+	}
+	if source.Target != "local-compose" || source.DeploymentID != deploymentID || source.Version != expectedSourceVersion {
+		return errors.New("selected local backup does not match the deployment and target release")
+	}
+	if err := source.Validate(); err != nil {
+		return fmt.Errorf("validate selected local backup: %w", err)
+	}
+	archive, err := d.openVerifiedBackup(*source)
 	if err != nil {
 		return err
 	}
@@ -177,8 +207,8 @@ func (d *LocalDocker) applyUpdate(ctx context.Context, candidate plan.Deployment
 	if err := verifyOwnership(current.Labels, deploymentID, "container"); err != nil {
 		return err
 	}
-	if current.Labels["com.wranglerlabs.ranch-hand.version"] != backup.Version {
-		return errors.New("the active container version does not match the recorded update backup")
+	if current.Labels["com.wranglerlabs.ranch-hand.version"] != fromVersion {
+		return errors.New("the active container version does not match the recorded installed version")
 	}
 	if err := d.verifyManagedVolume(ctx, current.DataVolume, deploymentID); err != nil {
 		return err
@@ -186,14 +216,14 @@ func (d *LocalDocker) applyUpdate(ctx context.Context, candidate plan.Deployment
 	if err := d.pullImage(ctx, image); err != nil {
 		return err
 	}
-	candidateVolume := updateVolumeName(deploymentID, backup.BackupID)
+	candidateVolume := updateVolumeName(deploymentID, safety.BackupID)
 	if err := d.createExclusiveManagedVolume(ctx, candidateVolume, deploymentID); err != nil {
 		return err
 	}
 	if err := d.dockerJSON(ctx, http.MethodPost, "/containers/"+url.PathEscape(current.ID)+"/stop", url.Values{"t": []string{"30"}}, nil, http.StatusNoContent, nil); err != nil {
-		return fmt.Errorf("stop prior RepoWrangler container for update: %w", err)
+		return fmt.Errorf("stop prior RepoWrangler container for %s: %w", kind, err)
 	}
-	rollbackName := rollbackContainerName(project, backup.BackupID)
+	rollbackName := rollbackContainerName(project, safety.BackupID)
 	if err := d.renameContainer(ctx, current.ID, rollbackName); err != nil {
 		return err
 	}
@@ -211,11 +241,11 @@ func (d *LocalDocker) applyUpdate(ctx context.Context, candidate plan.Deployment
 }
 
 func updateVolumeName(deploymentID, backupID string) string {
-	return "rhv-" + deploymentID[:12] + "-" + backupID[:12]
+	return "rhv-" + deploymentID[:12] + "-" + backupID
 }
 
 func rollbackContainerName(project, backupID string) string {
-	return project + "-rollback-" + backupID[:12]
+	return project + "-rollback-" + backupID
 }
 
 func (d *LocalDocker) renameContainer(ctx context.Context, containerID, name string) error {
@@ -349,11 +379,11 @@ func decodeHealthResponse(response *http.Response, output any) error {
 	return nil
 }
 
-func (d *LocalDocker) Recover(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, backup *lifecycle.BackupRecord, _ Credentials) error {
-	if kind == lifecycle.Update {
-		return d.recoverUpdate(ctx, candidate, backup)
+func (d *LocalDocker) Recover(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, fromVersion string, backups lifecycle.OperationBackups, _ Credentials) error {
+	if kind == lifecycle.Update || kind == lifecycle.Restore || kind == lifecycle.Rollback {
+		return d.recoverReplacement(ctx, candidate, fromVersion, backups.Safety)
 	}
-	if kind != lifecycle.Install || backup != nil {
+	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return errors.New("local Docker recovery does not support the supplied operation state")
 	}
 	project := candidate.Configuration["projectName"]
@@ -378,11 +408,11 @@ func (d *LocalDocker) Recover(ctx context.Context, kind lifecycle.OperationKind,
 	return d.dockerJSON(ctx, http.MethodDelete, "/containers/"+url.PathEscape(metadata.ID), url.Values{"force": []string{"1"}, "v": []string{"1"}}, nil, http.StatusNoContent, nil)
 }
 
-func (d *LocalDocker) recoverUpdate(ctx context.Context, candidate plan.DeploymentPlan, backup *lifecycle.BackupRecord) error {
-	if backup == nil || backup.Target != "local-compose" {
-		return errors.New("local Docker update recovery requires its recorded backup")
+func (d *LocalDocker) recoverReplacement(ctx context.Context, candidate plan.DeploymentPlan, fromVersion string, safety *lifecycle.BackupRecord) error {
+	if safety == nil || safety.Target != "local-compose" || safety.Version != fromVersion {
+		return errors.New("local Docker replacement recovery requires its fresh safety backup")
 	}
-	if err := backup.Validate(); err != nil {
+	if err := safety.Validate(); err != nil {
 		return err
 	}
 	project := candidate.Configuration["projectName"]
@@ -390,47 +420,59 @@ func (d *LocalDocker) recoverUpdate(ctx context.Context, candidate plan.Deployme
 	if err != nil {
 		return err
 	}
-	if backup.DeploymentID != deploymentID {
+	if safety.DeploymentID != deploymentID {
 		return errors.New("local Docker recovery backup belongs to a different deployment")
 	}
 	containerName := project + "-server"
+	rollbackName := rollbackContainerName(project, safety.BackupID)
+	rollbackExists, rollback, err := d.containerMetadata(ctx, rollbackName)
+	if err != nil {
+		return err
+	}
 	exists, active, err := d.containerMetadata(ctx, containerName)
 	if err != nil {
 		return err
 	}
-	if exists {
+	if !rollbackExists {
+		if !exists {
+			return errors.New("the active and preserved pre-replacement RepoWrangler containers are both missing")
+		}
 		if err := verifyOwnership(active.Labels, deploymentID, "container"); err != nil {
 			return err
 		}
-		switch active.Labels["com.wranglerlabs.ranch-hand.version"] {
-		case backup.Version:
-			return d.startAndVerify(ctx, active, candidate, backup.Version)
-		case candidate.Release.Version:
-			if err := d.dockerJSON(ctx, http.MethodDelete, "/containers/"+url.PathEscape(active.ID), url.Values{"force": []string{"1"}}, nil, http.StatusNoContent, nil); err != nil {
-				return fmt.Errorf("remove failed updated RepoWrangler container: %w", err)
-			}
-		default:
-			return errors.New("refusing update recovery because the active container has an unexpected version")
+		if active.Labels["com.wranglerlabs.ranch-hand.version"] != fromVersion {
+			return errors.New("refusing replacement recovery because the active container has an unexpected version")
 		}
-	}
-	rollbackName := rollbackContainerName(project, backup.BackupID)
-	exists, rollback, err := d.containerMetadata(ctx, rollbackName)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return errors.New("the preserved pre-update RepoWrangler container is missing")
+		if err := d.removeManagedVolumeIfPresent(ctx, updateVolumeName(deploymentID, safety.BackupID), deploymentID); err != nil {
+			return fmt.Errorf("remove unused replacement volume: %w", err)
+		}
+		return d.startAndVerify(ctx, active, candidate, fromVersion)
 	}
 	if err := verifyOwnership(rollback.Labels, deploymentID, "rollback container"); err != nil {
 		return err
 	}
-	if rollback.Labels["com.wranglerlabs.ranch-hand.version"] != backup.Version {
-		return errors.New("the preserved rollback container version does not match the update backup")
+	if rollback.Labels["com.wranglerlabs.ranch-hand.version"] != fromVersion {
+		return errors.New("the preserved rollback container version does not match the safety backup")
+	}
+	candidateVolume := updateVolumeName(deploymentID, safety.BackupID)
+	if exists {
+		if err := verifyOwnership(active.Labels, deploymentID, "replacement container"); err != nil {
+			return err
+		}
+		if active.DataVolume != candidateVolume || active.Labels["com.wranglerlabs.ranch-hand.version"] != candidate.Release.Version {
+			return errors.New("refusing recovery because the active replacement container identity is unexpected")
+		}
+		if err := d.dockerJSON(ctx, http.MethodDelete, "/containers/"+url.PathEscape(active.ID), url.Values{"force": []string{"1"}}, nil, http.StatusNoContent, nil); err != nil {
+			return fmt.Errorf("remove failed replacement container: %w", err)
+		}
+	}
+	if err := d.removeManagedVolumeIfPresent(ctx, candidateVolume, deploymentID); err != nil {
+		return fmt.Errorf("remove failed replacement volume: %w", err)
 	}
 	if err := d.renameContainer(ctx, rollback.ID, containerName); err != nil {
 		return err
 	}
-	return d.startAndVerify(ctx, rollback, candidate, backup.Version)
+	return d.startAndVerify(ctx, rollback, candidate, fromVersion)
 }
 
 func (d *LocalDocker) startAndVerify(ctx context.Context, metadata dockerContainer, candidate plan.DeploymentPlan, expectedVersion string) error {
@@ -505,6 +547,23 @@ func (d *LocalDocker) verifyManagedVolume(ctx context.Context, name, deploymentI
 		return err
 	}
 	return verifyOwnership(details.Labels, deploymentID, "volume")
+}
+
+func (d *LocalDocker) removeManagedVolumeIfPresent(ctx context.Context, name, deploymentID string) error {
+	var details struct {
+		Labels map[string]string `json:"Labels"`
+	}
+	err := d.dockerJSON(ctx, http.MethodGet, "/volumes/"+url.PathEscape(name), nil, nil, http.StatusOK, &details)
+	if errors.Is(err, errDockerNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := verifyOwnership(details.Labels, deploymentID, "replacement volume"); err != nil {
+		return err
+	}
+	return d.dockerJSON(ctx, http.MethodDelete, "/volumes/"+url.PathEscape(name), nil, nil, http.StatusNoContent, nil)
 }
 
 func verifyOwnership(labels map[string]string, deploymentID, resource string) error {

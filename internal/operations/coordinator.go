@@ -15,10 +15,11 @@ import (
 )
 
 type journalStore interface {
-	Begin(lifecycle.OperationKind, plan.DeploymentPlan, string) (lifecycle.Journal, error)
+	BeginWithInputBackup(lifecycle.OperationKind, plan.DeploymentPlan, string, string) (lifecycle.Journal, error)
 	Transition(string, string, lifecycle.Phase) (lifecycle.Journal, error)
 	TransitionWithReference(string, string, lifecycle.Phase, string) (lifecycle.Journal, error)
 	RecordBackup(lifecycle.Journal, lifecycle.BackupArtifact) (lifecycle.BackupRecord, error)
+	Backup(string, string) (lifecycle.BackupRecord, error)
 }
 
 type stager interface {
@@ -26,10 +27,10 @@ type stager interface {
 }
 
 type Mutator interface {
-	Backup(context.Context, plan.DeploymentPlan, adapter.Credentials) (lifecycle.BackupArtifact, error)
-	Apply(context.Context, lifecycle.OperationKind, plan.DeploymentPlan, bundle.StagedBundle, *lifecycle.BackupRecord, adapter.Credentials) error
+	Backup(context.Context, plan.DeploymentPlan, string, adapter.Credentials) (lifecycle.BackupArtifact, error)
+	Apply(context.Context, lifecycle.OperationKind, plan.DeploymentPlan, string, bundle.StagedBundle, lifecycle.OperationBackups, adapter.Credentials) error
 	Verify(context.Context, plan.DeploymentPlan, adapter.Credentials) error
-	Recover(context.Context, lifecycle.OperationKind, plan.DeploymentPlan, *lifecycle.BackupRecord, adapter.Credentials) error
+	Recover(context.Context, lifecycle.OperationKind, plan.DeploymentPlan, string, lifecycle.OperationBackups, adapter.Credentials) error
 }
 
 type Registry struct {
@@ -53,14 +54,16 @@ type Request struct {
 	Kind        lifecycle.OperationKind
 	Plan        plan.DeploymentPlan
 	FromVersion string
+	BackupID    string
 	Artifact    productrelease.VerifiedArtifact
 	Credentials adapter.Credentials
 }
 
 type Result struct {
-	Journal   lifecycle.Journal       `json:"journal"`
-	Backup    *lifecycle.BackupRecord `json:"backup,omitempty"`
-	Recovered bool                    `json:"recovered"`
+	Journal        lifecycle.Journal       `json:"journal"`
+	Backup         *lifecycle.BackupRecord `json:"backup,omitempty"`
+	SelectedBackup *lifecycle.BackupRecord `json:"selectedBackup,omitempty"`
+	Recovered      bool                    `json:"recovered"`
 }
 
 type Coordinator struct {
@@ -87,7 +90,7 @@ func (c *Coordinator) Run(ctx context.Context, request Request) (Result, error) 
 	if err := request.Plan.Validate(); err != nil {
 		return Result{}, err
 	}
-	if request.Kind != lifecycle.Install && request.Kind != lifecycle.Update && request.Kind != lifecycle.Backup {
+	if request.Kind != lifecycle.Install && request.Kind != lifecycle.Update && request.Kind != lifecycle.Backup && request.Kind != lifecycle.Restore && request.Kind != lifecycle.Rollback {
 		return Result{}, fmt.Errorf("%s coordinator is not implemented yet", request.Kind)
 	}
 	if request.Kind != lifecycle.Backup {
@@ -99,14 +102,35 @@ func (c *Coordinator) Run(ctx context.Context, request Request) (Result, error) 
 	if !ok {
 		return Result{}, fmt.Errorf("no lifecycle mutator is registered for target %q", request.Plan.Target.Kind)
 	}
-	journal, err := c.store.Begin(request.Kind, request.Plan, request.FromVersion)
+	result := Result{}
+	if request.Kind == lifecycle.Restore || request.Kind == lifecycle.Rollback {
+		deploymentID, identityErr := lifecycle.DeploymentID(request.Plan)
+		if identityErr != nil {
+			return Result{}, identityErr
+		}
+		selected, lookupErr := c.store.Backup(deploymentID, request.BackupID)
+		if lookupErr != nil {
+			return Result{}, fmt.Errorf("load selected backup: %w", lookupErr)
+		}
+		if selected.DeploymentID != deploymentID || selected.Target != request.Plan.Target.Kind || selected.Version != request.Plan.Release.Version {
+			return Result{}, errors.New("selected backup does not match the deployment, target, and requested release")
+		}
+		if request.Kind == lifecycle.Restore && selected.Version != request.FromVersion {
+			return Result{}, errors.New("restore requires a backup from the currently installed version")
+		}
+		if request.Kind == lifecycle.Rollback && selected.Version == request.FromVersion {
+			return Result{}, errors.New("rollback requires a backup from a different prior version")
+		}
+		result.SelectedBackup = &selected
+	}
+	journal, err := c.store.BeginWithInputBackup(request.Kind, request.Plan, request.FromVersion, request.BackupID)
 	if err != nil {
 		return Result{}, err
 	}
-	result := Result{Journal: journal}
+	result.Journal = journal
 
-	if request.Kind == lifecycle.Update || request.Kind == lifecycle.Backup {
-		artifact, backupErr := mutator.Backup(ctx, request.Plan, request.Credentials)
+	if request.Kind == lifecycle.Update || request.Kind == lifecycle.Backup || request.Kind == lifecycle.Restore || request.Kind == lifecycle.Rollback {
+		artifact, backupErr := mutator.Backup(ctx, request.Plan, request.FromVersion, request.Credentials)
 		if backupErr != nil {
 			if failed, transitionErr := c.store.Transition(journal.DeploymentID, journal.OperationID, lifecycle.Failed); transitionErr == nil {
 				result.Journal = failed
@@ -148,7 +172,8 @@ func (c *Coordinator) Run(ctx context.Context, request Request) (Result, error) 
 		return result, err
 	}
 	result.Journal = updated
-	if err := mutator.Apply(ctx, request.Kind, request.Plan, staged, result.Backup, request.Credentials); err != nil {
+	backups := lifecycle.OperationBackups{Selected: result.SelectedBackup, Safety: result.Backup}
+	if err := mutator.Apply(ctx, request.Kind, request.Plan, request.FromVersion, staged, backups, request.Credentials); err != nil {
 		return c.recover(ctx, request, mutator, result, fmt.Errorf("apply target release: %w", err))
 	}
 	updated, err = c.store.Transition(journal.DeploymentID, journal.OperationID, lifecycle.Applied)
@@ -196,7 +221,8 @@ func (c *Coordinator) recover(ctx context.Context, request Request, mutator Muta
 		return result, errors.Join(operationErr, transitionErr)
 	}
 	result.Journal = journal
-	if err := mutator.Recover(recoveryContext, request.Kind, request.Plan, result.Backup, request.Credentials); err != nil {
+	backups := lifecycle.OperationBackups{Selected: result.SelectedBackup, Safety: result.Backup}
+	if err := mutator.Recover(recoveryContext, request.Kind, request.Plan, request.FromVersion, backups, request.Credentials); err != nil {
 		if failed, failErr := c.store.Transition(result.Journal.DeploymentID, result.Journal.OperationID, lifecycle.Failed); failErr == nil {
 			result.Journal = failed
 		}

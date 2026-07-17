@@ -2,14 +2,14 @@
 
 Ranch Hand is the standalone, Windows-first lifecycle manager for [RepoWrangler](https://github.com/WranglerLabs/repo-wrangler). It is for operators who want to install and manage RepoWrangler without cloning or forking its source repository. Contributors and advanced operators can still use RepoWrangler's documented deployment recipes directly.
 
-> **Status:** active implementation. The secure local application shell, immutable release verification/cache, secret-free plan creation/export, artifact preflight, non-mutating dry run, and live target-native connectivity preflight are working. Ranch Hand can install evaluation instances on all four initial targets; local Docker also supports consistent backup and backup-first update. Production lifecycle remains under implementation; this repository is not a production installer release.
+> **Status:** active implementation. The secure local application shell, immutable release verification/cache, secret-free plan creation/export, artifact preflight, non-mutating dry run, and live target-native connectivity preflight are working. Ranch Hand can install evaluation instances on all four initial targets; local Docker also supports consistent backup and backup-first update, restore, and rollback. Production lifecycle remains under implementation; this repository is not a production installer release.
 
 ## First release scope
 
 - Discover and verify an explicit immutable RepoWrangler release.
 - Validate its version, SHA-256 digest, size, compatibility, SBOM, and attestation.
 - Create a versioned, secret-free deployment plan.
-- Preflight, dry run, install, backup-first update, verify, rollback, export, and produce redacted diagnostics.
+- Preflight, dry run, install, backup-first update/restore/rollback, verify, export, and produce redacted diagnostics.
 - Target Azure Container Apps, Cloudflare, local Docker Compose, or remote Linux Docker Compose over SSH.
 
 Ranch Hand is optional. It is not a RepoWrangler feature screen, does not change RepoWrangler's read-only provider model, and does not require a Ranch Hand-managed deployment.
@@ -42,7 +42,9 @@ The same coordinator can create a consistent local backup. Ranch Hand verifies t
 
 Local updates are backup-first and copy-on-write. Ranch Hand verifies the current release identity and backup, pulls the new digest-pinned image, seeds a new owned volume from the archive, stops and preserves the prior container and volume under a deterministic rollback identity, then activates the new container. Readiness includes both `/health/ready` and an exact immutable version match from `/health/live`. Failed activation removes only the new owned container and restores the preserved prior container; migrations never touch the rollback volume.
 
-Explicit rollback, restore, rollback-pool retention controls, and production credential configuration for this target are not enabled yet. Manual clone/fork and custom automation remain supported RepoWrangler deployment options.
+Explicit local restore and rollback use the authenticated installation/backup inventory rather than accepting a path. Restore is same-version; rollback selects a backup created by the exact prior release. Both first create a fresh safety backup, restore into a new owned volume, preserve the current container and untouched volume, and require exact target-version health before commit. Recovery identifies the preserved safety container before examining the replacement, so a failed same-version restore cannot be confused with the original instance. See [ADR-0007](docs/adr/0007-backup-first-local-restore-and-rollback.md).
+
+Rollback-pool retention controls and production credential configuration for this target are not enabled yet. Manual clone/fork and custom automation remain supported RepoWrangler deployment options.
 
 ## Azure Container Apps evaluation install
 
@@ -93,7 +95,7 @@ Lifecycle mutations use a durable, secret-free journal keyed to the stable targe
 
 Every committed install and version-changing operation also advances a validated `installation.json` current-state record before releasing the deployment lock. Later operations must match its exact recorded version; an arbitrary `fromVersion` cannot begin a mutation. If finalization is interrupted after the committed journal is durable, Ranch Hand rebuilds the projection from that exact journal. The authenticated loopback `GET /api/v1/installations` endpoint exposes this secret-free inventory to the Windows interface. Historical journals remain immutable. See [ADR-0006](docs/adr/0006-versioned-installation-records.md) for the record and schema migration policy.
 
-The coordinator implements install, backup, and backup-first update sequencing. It binds `backup-complete` to an exact validated backup record, stages only the verified plan artifact, and automatically enters recovery if apply, health verification, or the post-apply journal write fails. Recovery receives a cancellation-independent bounded context so a closed browser request cannot abandon a partially mutated target. All four initial targets are wired for the bounded evaluation installs above; local Docker also supports consistent backup and copy-on-write update. Explicit restore/rollback and the other production lifecycle mutations remain disabled. See [ADR-0002](docs/adr/0002-durable-lifecycle-transactions.md) for phase rules, recovery semantics, and trade-offs.
+The coordinator implements install, backup, and backup-first update/restore/rollback sequencing. It binds `backup-complete` to an exact validated safety-backup record, binds restore input to a separate inventory record, stages only the verified plan artifact, and automatically enters recovery if apply, health verification, or the post-apply journal write fails. Recovery receives a cancellation-independent bounded context so a closed browser request cannot abandon a partially mutated target. All four initial targets are wired for the bounded evaluation installs above; local Docker also supports consistent backup and copy-on-write update, restore, and rollback. Repair, uninstall, and the remaining target lifecycle mutations remain disabled. See [ADR-0002](docs/adr/0002-durable-lifecycle-transactions.md) for phase rules, recovery semantics, and trade-offs.
 
 ## Build from source
 

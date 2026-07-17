@@ -47,6 +47,7 @@ type operationRunner interface {
 
 type installationReader interface {
 	Installations() ([]lifecycle.InstallationRecord, error)
+	Backups(string) ([]lifecycle.BackupRecord, error)
 }
 
 type Server struct {
@@ -110,9 +111,23 @@ func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, 
 	mux.Handle("POST /api/v1/bundles/stage", s.authorize(http.HandlerFunc(s.stageBundle)))
 	mux.Handle("POST /api/v1/operations/run", s.authorize(http.HandlerFunc(s.runOperation)))
 	mux.Handle("GET /api/v1/installations", s.authorize(http.HandlerFunc(s.listInstallations)))
+	mux.Handle("GET /api/v1/installations/{deploymentID}/backups", s.authorize(http.HandlerFunc(s.listBackups)))
 	mux.Handle("POST /api/v1/releases/verify", s.authorize(http.HandlerFunc(s.verifyRelease)))
 	mux.Handle("/", s.spa())
 	return s.securityHeaders(mux)
+}
+
+func (s *Server) listBackups(w http.ResponseWriter, r *http.Request) {
+	if s.installations == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "backup records are unavailable"})
+		return
+	}
+	records, err := s.installations.Backups(r.PathValue("deploymentID"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "read backup records: " + err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"backups": records})
 }
 
 func (s *Server) listInstallations(w http.ResponseWriter, _ *http.Request) {
@@ -141,6 +156,7 @@ func (s *Server) runOperation(w http.ResponseWriter, r *http.Request) {
 		Kind        lifecycle.OperationKind `json:"kind"`
 		Plan        plan.DeploymentPlan     `json:"plan"`
 		FromVersion string                  `json:"fromVersion,omitempty"`
+		BackupID    string                  `json:"backupId,omitempty"`
 		Credentials adapter.Credentials     `json:"credentials"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxTargetRequestSize))
@@ -150,7 +166,7 @@ func (s *Server) runOperation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer request.Credentials.Clear()
-	localOperation := request.Plan.Target.Kind == "local-compose" && (request.Kind == lifecycle.Install || request.Kind == lifecycle.Backup || request.Kind == lifecycle.Update)
+	localOperation := request.Plan.Target.Kind == "local-compose" && (request.Kind == lifecycle.Install || request.Kind == lifecycle.Backup || request.Kind == lifecycle.Update || request.Kind == lifecycle.Restore || request.Kind == lifecycle.Rollback)
 	azureOperation := request.Plan.Target.Kind == "azure-container-apps" && request.Kind == lifecycle.Install
 	cloudflareOperation := request.Plan.Target.Kind == "cloudflare" && request.Kind == lifecycle.Install
 	remoteOperation := request.Plan.Target.Kind == "remote-linux-compose" && request.Kind == lifecycle.Install
@@ -170,6 +186,18 @@ func (s *Server) runOperation(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "local update requires the different explicit immutable version currently installed"})
 		return
 	}
+	if request.Kind == lifecycle.Restore && (request.BackupID == "" || request.FromVersion != request.Plan.Release.Version) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "local restore requires a selected backup and the currently installed immutable release"})
+		return
+	}
+	if request.Kind == lifecycle.Rollback && (request.BackupID == "" || request.FromVersion == "" || request.FromVersion == request.Plan.Release.Version) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "local rollback requires a selected backup for a different explicit immutable release"})
+		return
+	}
+	if request.Kind != lifecycle.Restore && request.Kind != lifecycle.Rollback && request.BackupID != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "backupId is valid only for restore or rollback"})
+		return
+	}
 	verified, found := s.verifiedPlan(request.Plan)
 	if !found {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "the operation plan does not match a release verified during this Ranch Hand session"})
@@ -187,7 +215,7 @@ func (s *Server) runOperation(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "run a successful live target preflight for this exact plan before installation"})
 		return
 	}
-	result, err := s.coordinator.Run(r.Context(), operations.Request{Kind: request.Kind, Plan: request.Plan, FromVersion: request.FromVersion, Artifact: verified, Credentials: request.Credentials})
+	result, err := s.coordinator.Run(r.Context(), operations.Request{Kind: request.Kind, Plan: request.Plan, FromVersion: request.FromVersion, BackupID: request.BackupID, Artifact: verified, Credentials: request.Credentials})
 	if err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": err.Error(), "operation": result})
 		return

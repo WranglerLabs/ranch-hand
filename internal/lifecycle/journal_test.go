@@ -106,6 +106,37 @@ func TestBackupFirstUpdateCommits(t *testing.T) {
 	}
 }
 
+func TestRestoreJournalBindsInputBackupIdentity(t *testing.T) {
+	store := testStore(t)
+	commitInstall(t, store, lifecyclePlan("v1.2.3"))
+	if _, err := store.Begin(Restore, lifecyclePlan("v1.2.3"), "v1.2.3"); err == nil {
+		t.Fatal("restore journal began without an input backup identity")
+	}
+	backupID := strings.Repeat("e", 32)
+	journal, err := store.BeginWithInputBackup(Restore, lifecyclePlan("v1.2.3"), "v1.2.3", backupID)
+	if err != nil || journal.InputBackupID != backupID {
+		t.Fatalf("restore input backup was not bound: %+v, %v", journal, err)
+	}
+	transition(t, store, journal, Failed)
+}
+
+func TestLegacyJournalReaderPreservesVersionOneEventHash(t *testing.T) {
+	store := testStore(t)
+	journal, err := store.Begin(Install, lifecyclePlan("v1.2.3"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.SchemaVersion = legacyJournalSchemaVersion
+	journal.Events[0] = makeEvent(1, Prepared, journal.StartedAt, journalHeaderHash(journal), "")
+	if err := journal.Validate(); err != nil {
+		t.Fatalf("valid legacy journal was rejected: %v", err)
+	}
+	journal.InputBackupID = strings.Repeat("f", 32)
+	if err := journal.Validate(); err == nil {
+		t.Fatal("legacy journal accepted an unsupported restore input")
+	}
+}
+
 func TestSecondOperationIsRejectedWhileActive(t *testing.T) {
 	store := testStore(t)
 	journal, err := store.Begin(Install, lifecyclePlan("v1.2.3"), "")

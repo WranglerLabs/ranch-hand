@@ -49,12 +49,12 @@ func (f *fakeStager) Stage(artifact productrelease.VerifiedArtifact) (bundle.Sta
 }
 
 type fakeMutator struct {
-	calls           []string
-	applyError      error
-	verifyError     error
-	recoverError    error
-	appliedBackup   *lifecycle.BackupRecord
-	recoveredBackup *lifecycle.BackupRecord
+	calls            []string
+	applyError       error
+	verifyError      error
+	recoverError     error
+	appliedBackups   lifecycle.OperationBackups
+	recoveredBackups lifecycle.OperationBackups
 }
 
 type failingTransitionStore struct {
@@ -71,16 +71,14 @@ func (f *failingTransitionStore) Transition(deploymentID, operationID string, ph
 	return f.Store.Transition(deploymentID, operationID, phase)
 }
 
-func (f *fakeMutator) Backup(_ context.Context, _ plan.DeploymentPlan, _ adapter.Credentials) (lifecycle.BackupArtifact, error) {
+func (f *fakeMutator) Backup(_ context.Context, _ plan.DeploymentPlan, _ string, _ adapter.Credentials) (lifecycle.BackupArtifact, error) {
 	f.calls = append(f.calls, "backup")
 	return lifecycle.BackupArtifact{Kind: lifecycle.LocalArchive, Locator: "backups/current.tar.gz", Size: 42, SHA256: strings.Repeat("c", 64)}, nil
 }
 
-func (f *fakeMutator) Apply(_ context.Context, _ lifecycle.OperationKind, _ plan.DeploymentPlan, _ bundle.StagedBundle, backup *lifecycle.BackupRecord, _ adapter.Credentials) error {
+func (f *fakeMutator) Apply(_ context.Context, _ lifecycle.OperationKind, _ plan.DeploymentPlan, _ string, _ bundle.StagedBundle, backups lifecycle.OperationBackups, _ adapter.Credentials) error {
 	f.calls = append(f.calls, "apply")
-	if backup != nil {
-		f.appliedBackup = backup
-	}
+	f.appliedBackups = backups
 	return f.applyError
 }
 
@@ -89,9 +87,9 @@ func (f *fakeMutator) Verify(_ context.Context, _ plan.DeploymentPlan, _ adapter
 	return f.verifyError
 }
 
-func (f *fakeMutator) Recover(_ context.Context, _ lifecycle.OperationKind, _ plan.DeploymentPlan, backup *lifecycle.BackupRecord, _ adapter.Credentials) error {
+func (f *fakeMutator) Recover(_ context.Context, _ lifecycle.OperationKind, _ plan.DeploymentPlan, _ string, backups lifecycle.OperationBackups, _ adapter.Credentials) error {
 	f.calls = append(f.calls, "recover")
-	f.recoveredBackup = backup
+	f.recoveredBackups = backups
 	return f.recoverError
 }
 
@@ -115,8 +113,8 @@ func seedInstalledVersion(t *testing.T, coordinator *Coordinator, mutator *fakeM
 		t.Fatalf("seed install failed: %+v, %v", result, err)
 	}
 	mutator.calls = nil
-	mutator.appliedBackup = nil
-	mutator.recoveredBackup = nil
+	mutator.appliedBackups = lifecycle.OperationBackups{}
+	mutator.recoveredBackups = lifecycle.OperationBackups{}
 	staged.calls = 0
 }
 
@@ -145,7 +143,7 @@ func TestUpdateBacksUpBeforeApply(t *testing.T) {
 	if strings.Join(mutator.calls, ",") != "backup,apply,verify" {
 		t.Fatalf("backup-first ordering violated: %v", mutator.calls)
 	}
-	if mutator.appliedBackup == nil || mutator.appliedBackup.BackupID != result.Backup.BackupID {
+	if mutator.appliedBackups.Safety == nil || mutator.appliedBackups.Safety.BackupID != result.Backup.BackupID {
 		t.Fatal("apply did not receive the exact recorded update backup")
 	}
 }
@@ -161,7 +159,7 @@ func TestFailedVerificationRecoversExactBackup(t *testing.T) {
 	if err == nil || !result.Recovered || result.Journal.Phase != lifecycle.Recovered {
 		t.Fatalf("failed update did not recover: %+v, %v", result, err)
 	}
-	if result.Backup == nil || mutator.recoveredBackup == nil || result.Backup.BackupID != mutator.recoveredBackup.BackupID {
+	if result.Backup == nil || mutator.recoveredBackups.Safety == nil || result.Backup.BackupID != mutator.recoveredBackups.Safety.BackupID {
 		t.Fatal("recovery did not receive the recorded update backup")
 	}
 }
@@ -177,6 +175,64 @@ func TestBackupOperationDoesNotStageOrApply(t *testing.T) {
 	}
 	if strings.Join(mutator.calls, ",") != "backup" || staged.calls != 0 {
 		t.Fatalf("backup performed release mutation: %v, stage=%d", mutator.calls, staged.calls)
+	}
+}
+
+func TestRestoreUsesSelectedBackupAndCreatesFreshSafetyBackup(t *testing.T) {
+	mutator, staged := &fakeMutator{}, &fakeStager{}
+	coordinator := coordinatorForTest(t, mutator, staged)
+	seedInstalledVersion(t, coordinator, mutator, staged, "v1.2.3")
+	candidate := operationPlan("v1.2.3")
+	selectedResult, err := coordinator.Run(context.Background(), Request{Kind: lifecycle.Backup, Plan: candidate, FromVersion: "v1.2.3"})
+	if err != nil || selectedResult.Backup == nil {
+		t.Fatalf("create selected restore backup: %+v, %v", selectedResult, err)
+	}
+	mutator.calls = nil
+	staged.calls = 0
+	result, err := coordinator.Run(context.Background(), Request{
+		Kind: lifecycle.Restore, Plan: candidate, FromVersion: "v1.2.3",
+		BackupID: selectedResult.Backup.BackupID, Artifact: operationArtifact(candidate),
+	})
+	if err != nil || result.Journal.Phase != lifecycle.Committed || result.Backup == nil || result.SelectedBackup == nil {
+		t.Fatalf("restore failed: %+v, %v", result, err)
+	}
+	if result.Journal.InputBackupID != selectedResult.Backup.BackupID {
+		t.Fatal("restore journal did not bind its selected input backup")
+	}
+	if strings.Join(mutator.calls, ",") != "backup,apply,verify" ||
+		mutator.appliedBackups.Selected.BackupID != selectedResult.Backup.BackupID ||
+		mutator.appliedBackups.Safety.BackupID != result.Backup.BackupID ||
+		result.Backup.BackupID == selectedResult.Backup.BackupID {
+		t.Fatalf("restore backup roles were not isolated: calls=%v selected=%+v safety=%+v", mutator.calls, mutator.appliedBackups.Selected, mutator.appliedBackups.Safety)
+	}
+}
+
+func TestRollbackUsesPriorBackupAndProtectsCurrentVersion(t *testing.T) {
+	mutator, staged := &fakeMutator{}, &fakeStager{}
+	coordinator := coordinatorForTest(t, mutator, staged)
+	seedInstalledVersion(t, coordinator, mutator, staged, "v1.2.2")
+	updated := operationPlan("v1.2.3")
+	updateResult, err := coordinator.Run(context.Background(), Request{Kind: lifecycle.Update, Plan: updated, FromVersion: "v1.2.2", Artifact: operationArtifact(updated)})
+	if err != nil || updateResult.Backup == nil {
+		t.Fatalf("seed update failed: %+v, %v", updateResult, err)
+	}
+	mutator.calls = nil
+	staged.calls = 0
+	prior := operationPlan("v1.2.2")
+	result, err := coordinator.Run(context.Background(), Request{
+		Kind: lifecycle.Rollback, Plan: prior, FromVersion: "v1.2.3",
+		BackupID: updateResult.Backup.BackupID, Artifact: operationArtifact(prior),
+	})
+	if err != nil || result.Journal.Phase != lifecycle.Committed || result.Backup == nil || result.SelectedBackup == nil {
+		t.Fatalf("rollback failed: %+v, %v", result, err)
+	}
+	if result.Journal.InputBackupID != updateResult.Backup.BackupID {
+		t.Fatal("rollback journal did not bind its selected input backup")
+	}
+	if result.SelectedBackup.Version != "v1.2.2" || result.Backup.Version != "v1.2.3" ||
+		mutator.appliedBackups.Selected.BackupID != updateResult.Backup.BackupID ||
+		mutator.appliedBackups.Safety.BackupID != result.Backup.BackupID {
+		t.Fatalf("rollback did not bind prior and safety backups: %+v", result)
 	}
 }
 

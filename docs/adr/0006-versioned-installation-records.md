@@ -26,6 +26,8 @@ The installation record is a derived current-state projection. Hash-chained oper
 
 Lifecycle files declare an exact schema version. Readers reject unknown versions, unknown fields, malformed identities, non-canonical plans, and mismatched hashes rather than guessing.
 
+Journal reader `1.1` retains a bounded legacy `1.0` reader. Legacy journals cannot represent restore/rollback input and remain immutable; all new writes use `1.1`. This is the first application of the policy below.
+
 When a future schema is required:
 
 1. The executable must retain a bounded reader for every explicitly supported prior schema.

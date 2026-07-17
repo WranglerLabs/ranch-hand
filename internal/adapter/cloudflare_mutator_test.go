@@ -175,7 +175,7 @@ func TestCloudflareEvaluationInstallUsesNativeAPIsAndVerifiesIdentity(t *testing
 	})}
 	candidate := cloudflareEvaluationPlan()
 	credentials := Credentials{CloudflareAPIToken: "cf-token"}
-	if err := adapter.Apply(context.Background(), lifecycle.Install, candidate, stagedCloudflareBundle(t), nil, credentials); err != nil {
+	if err := adapter.Apply(context.Background(), lifecycle.Install, candidate, "", stagedCloudflareBundle(t), lifecycle.OperationBackups{}, credentials); err != nil {
 		t.Fatal(err)
 	}
 	if !databaseCreated || !markerWritten || !migrationApplied || !assetsUploaded || !workerUploaded || !schedulesUpdated || !subdomainEnabled {
@@ -213,7 +213,7 @@ func TestCloudflareRecoveryDeletesOnlyMarkerOwnedResources(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := newCloudflare(server.Client(), server.URL)
-	if err := adapter.Recover(context.Background(), lifecycle.Install, candidate, nil, Credentials{CloudflareAPIToken: "cf-token"}); err != nil {
+	if err := adapter.Recover(context.Background(), lifecycle.Install, candidate, "", lifecycle.OperationBackups{}, Credentials{CloudflareAPIToken: "cf-token"}); err != nil {
 		t.Fatal(err)
 	}
 	if !workerDeleted || !databaseDeleted {
@@ -235,7 +235,7 @@ func TestCloudflareRecoveryRefusesUnownedDatabase(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	err := newCloudflare(server.Client(), server.URL).Recover(context.Background(), lifecycle.Install, cloudflareEvaluationPlan(), nil, Credentials{CloudflareAPIToken: "cf-token"})
+	err := newCloudflare(server.Client(), server.URL).Recover(context.Background(), lifecycle.Install, cloudflareEvaluationPlan(), "", lifecycle.OperationBackups{}, Credentials{CloudflareAPIToken: "cf-token"})
 	if err == nil || deleted {
 		t.Fatal("Cloudflare recovery deleted or accepted an unowned database")
 	}

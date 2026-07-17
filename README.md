@@ -34,7 +34,7 @@ Preflight revalidates the plan and rehashes the cached artifact before reporting
 
 ## Local Docker evaluation install
 
-After the exact plan passes live Docker preflight and its verified bundle is safely staged, Ranch Hand can install the local Compose profile as a single loopback-only evaluation container. It talks directly to the Docker Engine API, pulls the manifest's digest-pinned RepoWrangler image, creates the selected data directory through a root-scoped filesystem boundary, labels the container with its Ranch Hand deployment identity, starts it, and verifies `/health/ready`. No repository clone, Docker CLI, shell, proxy, or public ingress is involved.
+After the exact plan passes live Docker preflight and its verified bundle is safely staged, Ranch Hand can install the local Compose profile as a single loopback-only evaluation container. It talks directly to the Docker Engine API, pulls the manifest's digest-pinned RepoWrangler image, creates or verifies an ownership-labeled persistent Docker volume, labels the container with its Ranch Hand deployment identity, starts it, and verifies `/health/ready` through a fixed loopback-only client. No host filesystem path, repository clone, Docker CLI, shell, proxy, or public ingress is involved.
 
 The interface requires an explicit confirmation and describes the current boundary before mutation. This path enables demo mode, SQLite, and GitHub authentication; it is not a production configuration. A partially failed install can remove only the exact container carrying Ranch Hand's matching ownership labels. Ranch Hand refuses to replace or recover an unowned container with the selected name.
 

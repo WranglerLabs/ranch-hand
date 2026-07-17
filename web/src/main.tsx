@@ -54,7 +54,7 @@ const targetFields: Record<string, { key: string; label: string; placeholder: st
   ],
   "local-compose": [
     { key: "projectName", label: "Compose project", placeholder: "repo-wrangler" },
-    { key: "dataDirectory", label: "Data directory", placeholder: "C:\\RepoWrangler\\data" },
+    { key: "dataVolume", label: "Persistent Docker volume", placeholder: "repo-wrangler-data" },
     { key: "listenAddress", label: "Listen address", placeholder: "127.0.0.1:8080" },
   ],
   "remote-linux-compose": [

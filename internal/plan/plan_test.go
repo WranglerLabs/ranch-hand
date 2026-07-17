@@ -80,7 +80,7 @@ func TestRejectsUnsafeLocalComposeInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	candidate.Target.Kind = "local-compose"
-	candidate.Configuration = map[string]string{"projectName": "Repo Wrangler", "dataDirectory": `C:\RepoWrangler\data`, "listenAddress": "0.0.0.0:8080"}
+	candidate.Configuration = map[string]string{"projectName": "Repo Wrangler", "dataVolume": "Repo Wrangler Data", "listenAddress": "0.0.0.0:8080"}
 	if err := candidate.Validate(); err == nil {
 		t.Fatal("unsafe local Compose inputs were accepted")
 	}

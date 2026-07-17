@@ -70,10 +70,10 @@
     },
     "localCompose": {
       "type": "object", "additionalProperties": false,
-      "required": ["projectName", "dataDirectory", "listenAddress"],
+      "required": ["projectName", "dataVolume", "listenAddress"],
       "properties": {
         "projectName": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$" },
-        "dataDirectory": { "type": "string", "pattern": "^(?:[A-Za-z]:\\\\|/)[^\\r\\n\\u0000]+$", "maxLength": 512 },
+        "dataVolume": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$" },
         "listenAddress": { "type": "string", "pattern": "^127\\.0\\.0\\.1:[0-9]{4,5}$" }
       }
     },

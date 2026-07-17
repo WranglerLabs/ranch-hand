@@ -10,11 +10,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/WranglerLabs/ranch-hand/internal/bundle"
@@ -34,7 +31,7 @@ func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, c
 	if kind != lifecycle.Install {
 		return fmt.Errorf("local Docker %s is not implemented", kind)
 	}
-	project, dataDirectory, hostIP, hostPort, err := localDockerInputs(candidate)
+	project, dataVolume, hostIP, hostPort, err := localDockerInputs(candidate)
 	if err != nil {
 		return err
 	}
@@ -53,14 +50,14 @@ func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, c
 	if exists {
 		return fmt.Errorf("Docker container %q already exists; Ranch Hand will not replace an unmanaged or unjournaled container", containerName)
 	}
-	if err := ensureDataDirectory(dataDirectory); err != nil {
-		return err
-	}
 	if err := d.pullImage(ctx, identity.Image); err != nil {
 		return err
 	}
 	deploymentID, err := lifecycle.DeploymentID(candidate)
 	if err != nil {
+		return err
+	}
+	if err := d.ensureManagedVolume(ctx, dataVolume, deploymentID); err != nil {
 		return err
 	}
 	payload := map[string]any{
@@ -72,7 +69,7 @@ func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, c
 			"com.wranglerlabs.ranch-hand.version": candidate.Release.Version,
 		},
 		"HostConfig": map[string]any{
-			"Binds":         []string{dataDirectory + ":/app/data"},
+			"Mounts":        []map[string]string{{"Type": "volume", "Source": dataVolume, "Target": "/app/data"}},
 			"PortBindings":  map[string]any{"8080/tcp": []map[string]string{{"HostIp": hostIP, "HostPort": hostPort}}},
 			"RestartPolicy": map[string]any{"Name": "unless-stopped", "MaximumRetryCount": 0},
 		},
@@ -94,24 +91,20 @@ func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, c
 }
 
 func (d *LocalDocker) Verify(ctx context.Context, candidate plan.DeploymentPlan, _ Credentials) error {
-	healthURL := d.healthURL
-	if healthURL == nil {
-		healthURL = localHealthURL
-	}
-	destination, err := healthURL(candidate)
+	_, _, _, hostPort, err := localDockerInputs(candidate)
 	if err != nil {
 		return err
 	}
 	client := d.healthClient
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = loopbackHealthClient(hostPort)
 	}
 	deadline, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
-		request, err := http.NewRequestWithContext(deadline, http.MethodGet, destination, nil)
+		request, err := http.NewRequestWithContext(deadline, http.MethodGet, "http://127.0.0.1/health/ready", nil)
 		if err != nil {
 			return err
 		}
@@ -158,6 +151,29 @@ func (d *LocalDocker) Recover(ctx context.Context, kind lifecycle.OperationKind,
 }
 
 var errDockerNotFound = errors.New("Docker resource not found")
+
+func (d *LocalDocker) ensureManagedVolume(ctx context.Context, name, deploymentID string) error {
+	var details struct {
+		Labels map[string]string `json:"Labels"`
+	}
+	err := d.dockerJSON(ctx, http.MethodGet, "/volumes/"+url.PathEscape(name), nil, nil, http.StatusOK, &details)
+	if err == nil {
+		if details.Labels["com.wranglerlabs.ranch-hand.managed"] != "true" || details.Labels["com.wranglerlabs.ranch-hand.deployment"] != deploymentID {
+			return errors.New("refusing to use a Docker volume that is not owned by this Ranch Hand deployment")
+		}
+		return nil
+	}
+	if !errors.Is(err, errDockerNotFound) {
+		return err
+	}
+	payload := map[string]any{"Name": name, "Labels": map[string]string{
+		"com.wranglerlabs.ranch-hand.managed": "true", "com.wranglerlabs.ranch-hand.deployment": deploymentID,
+	}}
+	if err := d.dockerJSON(ctx, http.MethodPost, "/volumes/create", nil, payload, http.StatusCreated, &details); err != nil {
+		return fmt.Errorf("create managed RepoWrangler data volume: %w", err)
+	}
+	return nil
+}
 
 func (d *LocalDocker) containerMetadata(ctx context.Context, name string) (bool, string, map[string]string, error) {
 	var details struct {
@@ -276,7 +292,7 @@ func (d *LocalDocker) dockerRequest(ctx context.Context, method, endpoint string
 	return d.client.Do(request)
 }
 
-func localDockerInputs(candidate plan.DeploymentPlan) (project, dataDirectory, hostIP, hostPort string, err error) {
+func localDockerInputs(candidate plan.DeploymentPlan) (project, dataVolume, hostIP, hostPort string, err error) {
 	if err = candidate.Validate(); err != nil {
 		return
 	}
@@ -285,14 +301,9 @@ func localDockerInputs(candidate plan.DeploymentPlan) (project, dataDirectory, h
 		err = errors.New("local Docker project name must use lowercase letters, numbers, underscore, or hyphen")
 		return
 	}
-	requestedDataDirectory := candidate.Configuration["dataDirectory"]
-	dataDirectory = filepath.Clean(requestedDataDirectory)
-	if dataDirectory != requestedDataDirectory {
-		err = errors.New("local Docker data directory must be a canonical absolute path")
-		return
-	}
-	if !filepath.IsAbs(dataDirectory) || dataDirectory == filepath.VolumeName(dataDirectory)+string(os.PathSeparator) {
-		err = errors.New("local Docker data directory must be an absolute non-root path")
+	dataVolume = candidate.Configuration["dataVolume"]
+	if !dockerProjectPattern.MatchString(dataVolume) {
+		err = errors.New("local Docker data volume must use lowercase letters, numbers, underscore, or hyphen")
 		return
 	}
 	hostIP, hostPort, err = net.SplitHostPort(candidate.Configuration["listenAddress"])
@@ -306,51 +317,13 @@ func localDockerInputs(candidate plan.DeploymentPlan) (project, dataDirectory, h
 	return
 }
 
-func localHealthURL(candidate plan.DeploymentPlan) (string, error) {
-	_, _, hostIP, hostPort, err := localDockerInputs(candidate)
-	if err != nil {
-		return "", err
+func loopbackHealthClient(port string) *http.Client {
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	transport := &http.Transport{
+		Proxy: nil,
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return dialer.DialContext(ctx, network, net.JoinHostPort("127.0.0.1", port))
+		},
 	}
-	return "http://" + net.JoinHostPort(hostIP, hostPort) + "/health/ready", nil
-}
-
-func ensureDataDirectory(destination string) error {
-	destination = filepath.Clean(destination)
-	ancestor := destination
-	for {
-		details, err := os.Lstat(ancestor)
-		if err == nil {
-			if !details.IsDir() || details.Mode()&os.ModeSymlink != 0 {
-				return errors.New("local Docker data path has a non-directory or symbolic-link ancestor")
-			}
-			break
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		parent := filepath.Dir(ancestor)
-		if parent == ancestor {
-			return errors.New("no existing ancestor for local Docker data directory")
-		}
-		ancestor = parent
-	}
-	physicalAncestor, err := filepath.EvalSymlinks(ancestor)
-	if err != nil {
-		return err
-	}
-	relative, err := filepath.Rel(ancestor, destination)
-	if err != nil || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
-		return errors.New("local Docker data directory escapes its selected ancestor")
-	}
-	root, err := os.OpenRoot(physicalAncestor)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	if relative != "." {
-		if err := root.MkdirAll(relative, 0o700); err != nil {
-			return fmt.Errorf("create local Docker data directory: %w", err)
-		}
-	}
-	return nil
+	return &http.Client{Transport: transport, Timeout: 10 * time.Second}
 }

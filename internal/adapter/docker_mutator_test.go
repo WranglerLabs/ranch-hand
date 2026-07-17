@@ -16,7 +16,7 @@ import (
 	"github.com/WranglerLabs/ranch-hand/internal/plan"
 )
 
-func localInstallPlan(dataDirectory string) plan.DeploymentPlan {
+func localInstallPlan() plan.DeploymentPlan {
 	return plan.DeploymentPlan{
 		SchemaVersion: plan.CurrentSchemaVersion, Name: "Local Wrangler",
 		Release: plan.ReleaseSelection{
@@ -25,7 +25,7 @@ func localInstallPlan(dataDirectory string) plan.DeploymentPlan {
 		},
 		Target: plan.Target{Kind: "local-compose"},
 		Configuration: map[string]string{
-			"projectName": "repo-wrangler", "dataDirectory": dataDirectory, "listenAddress": "127.0.0.1:18080",
+			"projectName": "repo-wrangler", "dataVolume": "repo-wrangler-data", "listenAddress": "127.0.0.1:18080",
 		},
 	}
 }
@@ -55,6 +55,11 @@ func TestLocalDockerInstallUsesEngineAPI(t *testing.T) {
 				t.Fatal("image pull was not digest-pinned")
 			}
 			_, _ = io.WriteString(w, "{\"status\":\"done\"}\n")
+		case r.Method == http.MethodGet && r.URL.Path == "/volumes/repo-wrangler-data":
+			http.Error(w, "missing", http.StatusNotFound)
+		case r.Method == http.MethodPost && r.URL.Path == "/volumes/create":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{"Name":"repo-wrangler-data","Labels":{"com.wranglerlabs.ranch-hand.managed":"true"}}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/containers/create":
 			if r.URL.Query().Get("name") != "repo-wrangler-server" {
 				t.Fatal("unexpected container name")
@@ -71,9 +76,8 @@ func TestLocalDockerInstallUsesEngineAPI(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	dataDirectory := filepath.Join(t.TempDir(), "data")
 	adapter := &LocalDocker{client: server.Client(), baseURL: server.URL}
-	err := adapter.Apply(context.Background(), lifecycle.Install, localInstallPlan(dataDirectory), stagedComposeBundle(t), Credentials{})
+	err := adapter.Apply(context.Background(), lifecycle.Install, localInstallPlan(), stagedComposeBundle(t), Credentials{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,27 +88,26 @@ func TestLocalDockerInstallUsesEngineAPI(t *testing.T) {
 	if labels["com.wranglerlabs.ranch-hand.managed"] != "true" {
 		t.Fatal("container create request omitted ownership label")
 	}
-	if details, err := os.Stat(dataDirectory); err != nil || !details.IsDir() {
-		t.Fatalf("data directory was not created: %v", err)
+	hostConfig := created["HostConfig"].(map[string]any)
+	if len(hostConfig["Mounts"].([]any)) != 1 {
+		t.Fatal("container create request omitted the persistent volume")
 	}
 }
 
 func TestLocalDockerVerifyUsesLoopbackHealth(t *testing.T) {
-	health := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/health/ready" {
-			t.Fatal("unexpected health path")
+	adapter := &LocalDocker{healthClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "http://127.0.0.1/health/ready" {
+			t.Fatalf("unexpected health URL: %s", r.URL)
 		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer health.Close()
-	adapter := &LocalDocker{healthClient: health.Client(), healthURL: func(plan.DeploymentPlan) (string, error) { return health.URL + "/health/ready", nil }}
-	if err := adapter.Verify(context.Background(), localInstallPlan(filepath.Join(t.TempDir(), "data")), Credentials{}); err != nil {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok")), Header: make(http.Header)}, nil
+	})}}
+	if err := adapter.Verify(context.Background(), localInstallPlan(), Credentials{}); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestLocalDockerRecoveryDeletesOnlyOwnedContainer(t *testing.T) {
-	candidate := localInstallPlan(filepath.Join(t.TempDir(), "data"))
+	candidate := localInstallPlan()
 	deploymentID, err := lifecycle.DeploymentID(candidate)
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +141,7 @@ func TestLocalDockerRecoveryRefusesUnownedContainer(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := &LocalDocker{client: server.Client(), baseURL: server.URL}
-	if err := adapter.Recover(context.Background(), lifecycle.Install, localInstallPlan(filepath.Join(t.TempDir(), "data")), nil, Credentials{}); err == nil {
+	if err := adapter.Recover(context.Background(), lifecycle.Install, localInstallPlan(), nil, Credentials{}); err == nil {
 		t.Fatal("recovery removed or accepted an unowned container")
 	}
 }

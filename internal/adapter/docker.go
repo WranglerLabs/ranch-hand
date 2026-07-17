@@ -16,13 +16,11 @@ type LocalDocker struct {
 	client       *http.Client
 	baseURL      string
 	healthClient *http.Client
-	healthURL    func(plan.DeploymentPlan) (string, error)
 }
 
 func NewLocalDocker() *LocalDocker {
 	return &LocalDocker{
 		client: &http.Client{Transport: localDockerTransport(), Timeout: 10 * time.Minute}, baseURL: "http://docker",
-		healthClient: &http.Client{Timeout: 10 * time.Second}, healthURL: localHealthURL,
 	}
 }
 

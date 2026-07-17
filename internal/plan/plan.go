@@ -42,12 +42,11 @@ var supportedTargets = map[string]bool{
 }
 
 var (
-	versionPattern             = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$`)
-	digestPattern              = regexp.MustCompile(`^[a-f0-9]{64}$`)
-	namePattern                = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,119}$`)
-	keyPattern                 = regexp.MustCompile(`^[a-z][A-Za-z0-9]{0,63}$`)
-	dockerProjectPattern       = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
-	windowsAbsolutePathPattern = regexp.MustCompile(`^[A-Za-z]:\\[^\x00\r\n]+$`)
+	versionPattern       = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$`)
+	digestPattern        = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	namePattern          = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,119}$`)
+	keyPattern           = regexp.MustCompile(`^[a-z][A-Za-z0-9]{0,63}$`)
+	dockerProjectPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 )
 
 var configurationFields = map[string]map[string]bool{
@@ -60,7 +59,7 @@ var configurationFields = map[string]map[string]bool{
 		"customDomain": false,
 	},
 	"local-compose": {
-		"projectName": true, "dataDirectory": true, "listenAddress": true,
+		"projectName": true, "dataVolume": true, "listenAddress": true,
 	},
 	"remote-linux-compose": {
 		"host": true, "port": true, "user": true, "installDirectory": true,
@@ -191,14 +190,8 @@ func (p DeploymentPlan) Validate() error {
 		if !dockerProjectPattern.MatchString(p.Configuration["projectName"]) {
 			return errors.New("local-compose projectName must use lowercase letters, numbers, underscore, or hyphen")
 		}
-		dataDirectory := p.Configuration["dataDirectory"]
-		if !strings.HasPrefix(dataDirectory, "/") && !windowsAbsolutePathPattern.MatchString(dataDirectory) {
-			return errors.New("local-compose dataDirectory must be an absolute Windows or POSIX path")
-		}
-		for _, component := range strings.FieldsFunc(strings.ReplaceAll(dataDirectory, "\\", "/"), func(value rune) bool { return value == '/' }) {
-			if component == ".." {
-				return errors.New("local-compose dataDirectory must not contain parent traversal")
-			}
+		if !dockerProjectPattern.MatchString(p.Configuration["dataVolume"]) {
+			return errors.New("local-compose dataVolume must use lowercase letters, numbers, underscore, or hyphen")
 		}
 		listen := strings.TrimPrefix(p.Configuration["listenAddress"], "127.0.0.1:")
 		port, err := strconv.Atoi(listen)

@@ -21,7 +21,7 @@ func lifecyclePlan(version string) plan.DeploymentPlan {
 		},
 		Target: plan.Target{Kind: "local-compose"},
 		Configuration: map[string]string{
-			"projectName": "repo-wrangler", "dataDirectory": `C:\RepoWrangler\data`, "listenAddress": "127.0.0.1:8080",
+			"projectName": "repo-wrangler", "dataVolume": "repo-wrangler-data", "listenAddress": "127.0.0.1:8080",
 		},
 	}
 }

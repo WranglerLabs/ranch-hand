@@ -22,7 +22,7 @@ func operationPlan(version string) plan.DeploymentPlan {
 			ManifestSHA256: strings.Repeat("a", 64), ArtifactSHA256: strings.Repeat("b", 64), ArtifactSize: 42,
 		},
 		Target:        plan.Target{Kind: "local-compose"},
-		Configuration: map[string]string{"projectName": "repo-wrangler", "dataDirectory": `C:\RepoWrangler\data`, "listenAddress": "127.0.0.1:8080"},
+		Configuration: map[string]string{"projectName": "repo-wrangler", "dataVolume": "repo-wrangler-data", "listenAddress": "127.0.0.1:8080"},
 	}
 }
 

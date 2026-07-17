@@ -80,7 +80,7 @@ func TestCreateExportPreflightAndDryRunVerifiedPlan(t *testing.T) {
 		t.Fatalf("verification returned %d: %s", response.Code, response.Body.String())
 	}
 
-	createBody := `{"name":"Local Wrangler","version":"v1.2.3","target":"local-compose","configuration":{"projectName":"repo-wrangler","dataDirectory":"C:\\RepoWrangler\\data","listenAddress":"127.0.0.1:8080"}}`
+	createBody := `{"name":"Local Wrangler","version":"v1.2.3","target":"local-compose","configuration":{"projectName":"repo-wrangler","dataVolume":"repo-wrangler-data","listenAddress":"127.0.0.1:8080"}}`
 	response = authorizedPost(h, "/api/v1/plans/create", createBody)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("plan creation returned %d: %s", response.Code, response.Body.String())

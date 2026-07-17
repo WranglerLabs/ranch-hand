@@ -33,6 +33,7 @@ type DeploymentPlan = {
 
 type PreflightReport = { ready: boolean; checks: { name: string; ok: boolean; message: string }[] };
 type DryRunReport = { mutated: boolean; steps: { order: number; description: string; mutates: boolean }[] };
+type TargetReport = { ready: boolean; target: string; checks: { name: string; ok: boolean; message: string }[] };
 
 const targetFields: Record<string, { key: string; label: string; placeholder: string; optional?: boolean }[]> = {
   "azure-container-apps": [
@@ -61,6 +62,17 @@ const targetFields: Record<string, { key: string; label: string; placeholder: st
     { key: "installDirectory", label: "Install directory", placeholder: "/opt/repo-wrangler" },
     { key: "projectName", label: "Compose project", placeholder: "repo-wrangler" },
     { key: "hostKeySha256", label: "Pinned SSH host key", placeholder: "SHA256:..." },
+  ],
+};
+
+const credentialFields: Record<string, { key: string; label: string; placeholder: string; file?: boolean }[]> = {
+  "azure-container-apps": [{ key: "azureAccessToken", label: "Temporary Azure ARM access token", placeholder: "Held in memory only" }],
+  cloudflare: [{ key: "cloudflareApiToken", label: "Scoped Cloudflare API token", placeholder: "Held in memory only" }],
+  "local-compose": [],
+  "remote-linux-compose": [
+    { key: "sshPrivateKey", label: "SSH private key file (optional with password)", placeholder: ".pem or OpenSSH key", file: true },
+    { key: "sshPrivateKeyPassphrase", label: "Private-key passphrase (optional)", placeholder: "Held in memory only" },
+    { key: "sshPassword", label: "SSH password (optional with key)", placeholder: "Held in memory only" },
   ],
 };
 
@@ -106,6 +118,10 @@ function App() {
   const [planError, setPlanError] = useState("");
   const [preflight, setPreflight] = useState<PreflightReport | null>(null);
   const [dryRun, setDryRun] = useState<DryRunReport | null>(null);
+  const [runtimeCredentials, setRuntimeCredentials] = useState<Record<string, string>>({});
+  const [targetReport, setTargetReport] = useState<TargetReport | null>(null);
+  const [targetRunning, setTargetRunning] = useState(false);
+  const [credentialEpoch, setCredentialEpoch] = useState(0);
 
   useEffect(() => {
     if (!token) {
@@ -123,6 +139,7 @@ function App() {
     setPlanResult(null);
     setPreflight(null);
     setDryRun(null);
+    setTargetReport(null);
     try {
       const result = await api<{ verified: true; artifact: VerifiedArtifact }>("/api/v1/releases/verify", {
         method: "POST",
@@ -142,6 +159,7 @@ function App() {
     setPlanResult(null);
     setPreflight(null);
     setDryRun(null);
+    setTargetReport(null);
     try {
       const cleaned = Object.fromEntries(Object.entries(configuration).filter(([, value]) => value.trim() !== ""));
       const result = await api<{ plan: DeploymentPlan }>("/api/v1/plans/create", {
@@ -185,6 +203,26 @@ function App() {
     URL.revokeObjectURL(href);
   }
 
+  async function runTargetPreflight(event: React.FormEvent) {
+    event.preventDefault();
+    if (!planResult) return;
+    setTargetRunning(true);
+    setPlanError("");
+    setTargetReport(null);
+    try {
+      setTargetReport(await api<TargetReport>("/api/v1/targets/preflight", {
+        method: "POST",
+        body: JSON.stringify({ plan: planResult, credentials: runtimeCredentials }),
+      }));
+    } catch (reason) {
+      setPlanError(reason instanceof Error ? reason.message : "Live target preflight failed");
+    } finally {
+      setRuntimeCredentials({});
+      setCredentialEpoch((value) => value + 1);
+      setTargetRunning(false);
+    }
+  }
+
   return (
     <main>
       <header>
@@ -204,7 +242,7 @@ function App() {
         <p>Choose an explicit release and deployment target. Ranch Hand downloads only the published bundle, verifies its declared size and SHA-256, and stores the verified bytes in its local versioned cache.</p>
         <form onSubmit={verifyRelease}>
           <label>Release version<input required pattern="v[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9.-]+)?" placeholder="v1.0.8" value={version} onChange={(event) => setVersion(event.target.value)} /></label>
-          <label>Deployment target<select value={target} onChange={(event) => { setTarget(event.target.value); setArtifact(null); setPlanResult(null); setConfiguration({}); }}><option value="azure-container-apps">Azure Container Apps</option><option value="cloudflare">Cloudflare</option><option value="local-compose">Local Docker Compose</option><option value="remote-linux-compose">Remote Linux Compose</option></select></label>
+          <label>Deployment target<select value={target} onChange={(event) => { setTarget(event.target.value); setArtifact(null); setPlanResult(null); setConfiguration({}); setRuntimeCredentials({}); setTargetReport(null); }}><option value="azure-container-apps">Azure Container Apps</option><option value="cloudflare">Cloudflare</option><option value="local-compose">Local Docker Compose</option><option value="remote-linux-compose">Remote Linux Compose</option></select></label>
           <button type="submit" disabled={verifying || !token}>{verifying ? "Verifying and caching…" : "Verify and cache release"}</button>
         </form>
         {releaseError && <div className="inline-result error" role="alert"><strong>Release rejected</strong><p>{releaseError}</p></div>}
@@ -223,6 +261,12 @@ function App() {
         {planResult && <div className="inline-result success"><strong>Versioned plan created</strong><p>This plan contains no credential fields and is bound to {planResult.release.version} / {planResult.target.kind}.</p><div className="button-row"><button type="button" onClick={runPreflight}>Preflight and dry run</button><button type="button" className="secondary" onClick={exportPlan}>Export JSON plan</button></div></div>}
         {preflight && <div className={`inline-result ${preflight.ready ? "success" : "error"}`}><strong>{preflight.ready ? "Preflight ready" : "Preflight blocked"}</strong><ul>{preflight.checks.map((check) => <li key={check.name}>{check.ok ? "✓" : "✕"} {check.message}</li>)}</ul></div>}
         {dryRun && <div className="inline-result success"><strong>Dry run completed without changes</strong><ol>{dryRun.steps.map((step) => <li key={step.order}>{step.description}</li>)}</ol></div>}
+        {dryRun && <form key={`${target}-${credentialEpoch}`} className="credential-form" onSubmit={runTargetPreflight}>
+          <div className="form-intro"><strong>Live target preflight</strong><p>Ranch Hand connects through the platform's native API. Credentials are sent only to this loopback process, are excluded from the plan, and are cleared from the form after the check.</p></div>
+          {credentialFields[target].map((field) => <label key={field.key}>{field.label}{field.file ? <input type="file" accept=".pem,.key" onChange={async (event) => { const file = event.target.files?.[0]; if (file && file.size > 1024 * 1024) { setPlanError("SSH private key file exceeds the 1 MiB safety limit"); return; } const contents = file ? await file.text() : ""; setRuntimeCredentials((current) => ({ ...current, [field.key]: contents })); }} /> : <input type="password" required={target !== "remote-linux-compose"} placeholder={field.placeholder} value={runtimeCredentials[field.key] || ""} onChange={(event) => setRuntimeCredentials({ ...runtimeCredentials, [field.key]: event.target.value })} />}</label>)}
+          <button type="submit" disabled={targetRunning}>{targetRunning ? "Checking target…" : "Run live target preflight"}</button>
+        </form>}
+        {targetReport && <div className={`inline-result ${targetReport.ready ? "success" : "error"}`}><strong>{targetReport.ready ? "Target is ready" : "Target preflight blocked"}</strong><ul>{targetReport.checks.map((check) => <li key={check.name}>{check.ok ? "✓" : "✕"} {check.message}</li>)}</ul></div>}
       </section>}
       <section className="grid" aria-label="Initial deployment targets">
         {[

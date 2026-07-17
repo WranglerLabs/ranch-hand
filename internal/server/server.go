@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/WranglerLabs/ranch-hand/internal/adapter"
 	"github.com/WranglerLabs/ranch-hand/internal/plan"
 	productrelease "github.com/WranglerLabs/ranch-hand/internal/release"
 )
@@ -20,10 +21,15 @@ import (
 const (
 	maxPlanSize           = 1 << 20
 	maxReleaseRequestSize = 64 << 10
+	maxTargetRequestSize  = 2 << 20
 )
 
 type releaseVerifier interface {
 	VerifyAndCache(context.Context, productrelease.Request) (productrelease.VerifiedArtifact, error)
+}
+
+type targetPreflighter interface {
+	Preflight(context.Context, plan.DeploymentPlan, adapter.Credentials) adapter.Report
 }
 
 type Server struct {
@@ -33,6 +39,7 @@ type Server struct {
 	releaseVerifier releaseVerifier
 	verifiedMu      sync.RWMutex
 	verified        map[string]productrelease.VerifiedArtifact
+	targets         targetPreflighter
 }
 
 func New(token, version string, ui fs.FS) http.Handler {
@@ -44,7 +51,11 @@ func New(token, version string, ui fs.FS) http.Handler {
 }
 
 func NewWithReleaseVerifier(token, version string, ui fs.FS, verifier releaseVerifier) http.Handler {
-	s := &Server{token: token, version: version, ui: ui, releaseVerifier: verifier, verified: make(map[string]productrelease.VerifiedArtifact)}
+	return NewWithDependencies(token, version, ui, verifier, adapter.NewRegistry())
+}
+
+func NewWithDependencies(token, version string, ui fs.FS, verifier releaseVerifier, targets targetPreflighter) http.Handler {
+	s := &Server{token: token, version: version, ui: ui, releaseVerifier: verifier, verified: make(map[string]productrelease.VerifiedArtifact), targets: targets}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", s.live)
 	mux.Handle("GET /api/v1/status", s.authorize(http.HandlerFunc(s.status)))
@@ -53,9 +64,52 @@ func NewWithReleaseVerifier(token, version string, ui fs.FS, verifier releaseVer
 	mux.Handle("POST /api/v1/plans/export", s.authorize(http.HandlerFunc(s.exportPlan)))
 	mux.Handle("POST /api/v1/plans/preflight", s.authorize(http.HandlerFunc(s.preflightPlan)))
 	mux.Handle("POST /api/v1/plans/dry-run", s.authorize(http.HandlerFunc(s.dryRunPlan)))
+	mux.Handle("POST /api/v1/targets/preflight", s.authorize(http.HandlerFunc(s.preflightTarget)))
 	mux.Handle("POST /api/v1/releases/verify", s.authorize(http.HandlerFunc(s.verifyRelease)))
 	mux.Handle("/", s.spa())
 	return s.securityHeaders(mux)
+}
+
+func (s *Server) preflightTarget(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request rejected"})
+		return
+	}
+	if s.targets == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "target adapters are unavailable"})
+		return
+	}
+	var request struct {
+		Plan        plan.DeploymentPlan `json:"plan"`
+		Credentials adapter.Credentials `json:"credentials"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxTargetRequestSize))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid target preflight request"})
+		return
+	}
+	defer request.Credentials.Clear()
+	if err := request.Credentials.Validate(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := request.Plan.Validate(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	verified, found := s.verifiedPlan(request.Plan)
+	if !found {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "the plan does not match a release verified during the current Ranch Hand session"})
+		return
+	}
+	artifactReport := plan.Preflight(request.Plan, verified.CachePath)
+	if !artifactReport.Ready {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "verified artifact preflight failed", "artifact": artifactReport})
+		return
+	}
+	report := s.targets.Preflight(r.Context(), request.Plan, request.Credentials)
+	writeJSON(w, http.StatusOK, report)
 }
 
 func (s *Server) live(w http.ResponseWriter, _ *http.Request) {

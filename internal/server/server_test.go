@@ -11,6 +11,8 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/WranglerLabs/ranch-hand/internal/adapter"
+	"github.com/WranglerLabs/ranch-hand/internal/plan"
 	productrelease "github.com/WranglerLabs/ranch-hand/internal/release"
 )
 
@@ -19,6 +21,15 @@ func testUI() fs.FS { return fstest.MapFS{"index.html": &fstest.MapFile{Data: []
 type fakeReleaseVerifier struct {
 	request   productrelease.Request
 	cachePath string
+}
+
+type fakeTargetPreflighter struct {
+	credentials adapter.Credentials
+}
+
+func (f *fakeTargetPreflighter) Preflight(_ context.Context, candidate plan.DeploymentPlan, credentials adapter.Credentials) adapter.Report {
+	f.credentials = credentials
+	return adapter.Report{Ready: true, Target: candidate.Target.Kind, Checks: []adapter.Check{{Name: "native-api", OK: true, Message: "connected"}}}
 }
 
 func (f *fakeReleaseVerifier) VerifyAndCache(_ context.Context, request productrelease.Request) (productrelease.VerifiedArtifact, error) {
@@ -37,7 +48,8 @@ func TestCreateExportPreflightAndDryRunVerifiedPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	verifier := &fakeReleaseVerifier{cachePath: artifact}
-	h := NewWithReleaseVerifier("secret-token", "test", testUI(), verifier)
+	targets := &fakeTargetPreflighter{}
+	h := NewWithDependencies("secret-token", "test", testUI(), verifier, targets)
 	manifest := "https://github.com/WranglerLabs/repo-wrangler/releases/download/v1.2.3/release-manifest.json"
 	verifyBody := `{"manifestUrl":"` + manifest + `","version":"v1.2.3","target":"local-compose"}`
 	response := authorizedPost(h, "/api/v1/releases/verify", verifyBody)
@@ -72,6 +84,14 @@ func TestCreateExportPreflightAndDryRunVerifiedPlan(t *testing.T) {
 	response = authorizedPost(h, "/api/v1/plans/preflight", string(created.Plan))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"ready":true`) {
 		t.Fatalf("preflight returned %d: %s", response.Code, response.Body.String())
+	}
+	targetBody := `{"plan":` + string(created.Plan) + `,"credentials":{"sshPassword":"runtime-only"}}`
+	response = authorizedPost(h, "/api/v1/targets/preflight", targetBody)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"ready":true`) {
+		t.Fatalf("target preflight returned %d: %s", response.Code, response.Body.String())
+	}
+	if targets.credentials.SSHPassword != "runtime-only" {
+		t.Fatal("target adapter did not receive runtime credential")
 	}
 }
 

@@ -33,6 +33,8 @@ var defaultTrustedHosts = []string{
 
 var safeArtifactFilename = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$`)
 
+const officialReleaseBaseURL = "https://github.com/WranglerLabs/repo-wrangler/releases/download"
+
 type Request struct {
 	ManifestURL    string `json:"manifestUrl"`
 	ManifestSHA256 string `json:"manifestSha256,omitempty"`
@@ -58,13 +60,14 @@ type Service struct {
 	client       *http.Client
 	cacheRoot    string
 	trustedHosts map[string]bool
+	releaseBase  *url.URL
 }
 
 func NewService(cacheRoot string) (*Service, error) {
-	return NewServiceWithClient(cacheRoot, &http.Client{Timeout: 10 * time.Minute}, defaultTrustedHosts)
+	return NewServiceWithClient(cacheRoot, &http.Client{Timeout: 10 * time.Minute}, defaultTrustedHosts, officialReleaseBaseURL)
 }
 
-func NewServiceWithClient(cacheRoot string, client *http.Client, trustedHosts []string) (*Service, error) {
+func NewServiceWithClient(cacheRoot string, client *http.Client, trustedHosts []string, releaseBaseURL string) (*Service, error) {
 	if client == nil {
 		return nil, errors.New("HTTP client is required")
 	}
@@ -82,6 +85,12 @@ func NewServiceWithClient(cacheRoot string, client *http.Client, trustedHosts []
 	if len(hosts) == 0 {
 		return nil, errors.New("at least one trusted release host is required")
 	}
+	releaseBase, err := url.Parse(releaseBaseURL)
+	if err != nil || releaseBase.Scheme != "https" || releaseBase.Host == "" || !hosts[strings.ToLower(releaseBase.Hostname())] {
+		return nil, errors.New("release base must be an absolute HTTPS URL on a trusted host")
+	}
+	releaseBase.RawQuery = ""
+	releaseBase.Fragment = ""
 
 	copyClient := *client
 	previousRedirect := client.CheckRedirect
@@ -97,7 +106,7 @@ func NewServiceWithClient(cacheRoot string, client *http.Client, trustedHosts []
 		}
 		return nil
 	}
-	return &Service{client: &copyClient, cacheRoot: cacheRoot, trustedHosts: hosts}, nil
+	return &Service{client: &copyClient, cacheRoot: cacheRoot, trustedHosts: hosts, releaseBase: releaseBase}, nil
 }
 
 func (s *Service) VerifyAndCache(ctx context.Context, request Request) (VerifiedArtifact, error) {
@@ -107,14 +116,15 @@ func (s *Service) VerifyAndCache(ctx context.Context, request Request) (Verified
 	if err := ValidateTarget(request.Target); err != nil {
 		return VerifiedArtifact{}, err
 	}
-	if err := s.validateManifestURL(request.ManifestURL, request.Version); err != nil {
+	manifestURL, err := s.validateManifestURL(request.ManifestURL, request.Version)
+	if err != nil {
 		return VerifiedArtifact{}, fmt.Errorf("manifest URL: %w", err)
 	}
 	if request.ManifestSHA256 != "" && !digestPattern.MatchString(request.ManifestSHA256) {
 		return VerifiedArtifact{}, errors.New("manifestSha256 must contain 64 hexadecimal characters")
 	}
 
-	manifestBytes, err := s.downloadBytes(ctx, request.ManifestURL, maxManifestSize)
+	manifestBytes, err := s.downloadBytes(ctx, manifestURL, maxManifestSize)
 	if err != nil {
 		return VerifiedArtifact{}, fmt.Errorf("download release manifest: %w", err)
 	}
@@ -142,8 +152,12 @@ func (s *Service) VerifyAndCache(ctx context.Context, request Request) (Verified
 	if artifact.Size > maxArtifactSize {
 		return VerifiedArtifact{}, fmt.Errorf("artifact exceeds the %d-byte safety limit", maxArtifactSize)
 	}
+	artifactURL, err := s.validateReleaseAssetURL(artifact.URL, request.Version)
+	if err != nil {
+		return VerifiedArtifact{}, fmt.Errorf("artifact URL for %s: %w", artifact.Target, err)
+	}
 
-	cachePath, cacheHit, err := s.cacheArtifact(ctx, request.Version, artifact)
+	cachePath, cacheHit, err := s.cacheArtifact(ctx, request.Version, artifact, artifactURL)
 	if err != nil {
 		return VerifiedArtifact{}, err
 	}
@@ -159,22 +173,39 @@ func (s *Service) validateURL(raw string) error {
 	return validateHTTPSURL(raw, s.trustedHosts)
 }
 
-func (s *Service) validateManifestURL(raw, version string) error {
-	if err := s.validateURL(raw); err != nil {
-		return err
+func (s *Service) validateManifestURL(raw, version string) (*url.URL, error) {
+	expected := s.releaseURL(version, "release-manifest.json")
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || !strings.EqualFold(parsed.Scheme, expected.Scheme) || !strings.EqualFold(parsed.Host, expected.Host) || !strings.EqualFold(parsed.Path, expected.Path) {
+		return nil, errors.New("must identify the official versioned RepoWrangler release manifest")
 	}
-	parsed, _ := url.Parse(raw)
-	if strings.EqualFold(parsed.Hostname(), "github.com") {
-		expected := "/WranglerLabs/repo-wrangler/releases/download/" + version + "/release-manifest.json"
-		if !strings.EqualFold(parsed.Path, expected) {
-			return errors.New("must identify the official versioned RepoWrangler release manifest")
-		}
-	}
-	return nil
+	return expected, nil
 }
 
-func (s *Service) downloadBytes(ctx context.Context, raw string, maximum int64) ([]byte, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
+func (s *Service) validateReleaseAssetURL(raw, version string) (*url.URL, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || !strings.EqualFold(parsed.Scheme, s.releaseBase.Scheme) || !strings.EqualFold(parsed.Host, s.releaseBase.Host) {
+		return nil, errors.New("must identify an official versioned RepoWrangler release asset")
+	}
+	filename := path.Base(parsed.Path)
+	if !safeArtifactFilename.MatchString(filename) || filename == "." || filename == ".." {
+		return nil, errors.New("contains an unsafe filename")
+	}
+	expected := s.releaseURL(version, filename)
+	if !strings.EqualFold(parsed.Path, expected.Path) {
+		return nil, errors.New("must identify an official versioned RepoWrangler release asset")
+	}
+	return expected, nil
+}
+
+func (s *Service) releaseURL(version, filename string) *url.URL {
+	result := *s.releaseBase
+	result.Path = "/" + strings.TrimPrefix(path.Join(s.releaseBase.Path, version, filename), "/")
+	return &result
+}
+
+func (s *Service) downloadBytes(ctx context.Context, destination *url.URL, maximum int64) ([]byte, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, destination.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -197,8 +228,8 @@ func (s *Service) downloadBytes(ctx context.Context, raw string, maximum int64) 
 	return contents, nil
 }
 
-func (s *Service) cacheArtifact(ctx context.Context, version string, artifact Artifact) (string, bool, error) {
-	filename := artifactFilename(artifact.URL, artifact.Target)
+func (s *Service) cacheArtifact(ctx context.Context, version string, artifact Artifact, downloadURL *url.URL) (string, bool, error) {
+	filename := artifactFilename(downloadURL.String(), artifact.Target)
 	directory := filepath.Join(s.cacheRoot, version, strings.ToLower(artifact.SHA256))
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return "", false, fmt.Errorf("create artifact cache: %w", err)
@@ -210,7 +241,7 @@ func (s *Service) cacheArtifact(ctx context.Context, version string, artifact Ar
 		return "", false, fmt.Errorf("verify cached artifact: %w", err)
 	}
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, artifact.URL, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL.String(), nil)
 	if err != nil {
 		return "", false, err
 	}

@@ -24,20 +24,20 @@ func releaseServer(t *testing.T, artifact []byte, artifactDigest string) (*httpt
 	var server *httptest.Server
 	server = httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
-		case "/release-manifest.json":
+		case "/v1.2.3/release-manifest.json":
 			manifest := Manifest{
 				SchemaVersion: SchemaVersion,
 				Product:       Product,
 				Version:       "v1.2.3",
 				ReleasedAt:    "2026-07-16T20:00:00Z",
 				Artifacts: []Artifact{{
-					Target: "local-compose", URL: server.URL + "/bundle.tar.gz",
+					Target: "local-compose", URL: server.URL + "/v1.2.3/bundle.tar.gz",
 					SHA256: artifactDigest, Size: int64(len(artifact)), MediaType: "application/gzip",
-					SBOMURL: server.URL + "/bundle.spdx.json",
+					SBOMURL: server.URL + "/v1.2.3/bundle.spdx.json",
 				}},
 			}
 			_ = json.NewEncoder(response).Encode(manifest)
-		case "/bundle.tar.gz":
+		case "/v1.2.3/bundle.tar.gz":
 			_, _ = response.Write(artifact)
 		default:
 			http.NotFound(response, request)
@@ -48,11 +48,11 @@ func releaseServer(t *testing.T, artifact []byte, artifactDigest string) (*httpt
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewServiceWithClient(t.TempDir(), server.Client(), []string{parsed.Hostname()})
+	service, err := NewServiceWithClient(t.TempDir(), server.Client(), []string{parsed.Hostname()}, server.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := Request{ManifestURL: server.URL + "/release-manifest.json", Version: "v1.2.3", Target: "local-compose"}
+	request := Request{ManifestURL: server.URL + "/v1.2.3/release-manifest.json", Version: "v1.2.3", Target: "local-compose"}
 	return server, service, request
 }
 
@@ -116,11 +116,11 @@ func TestRejectsOversizedManifest(t *testing.T) {
 	}))
 	defer server.Close()
 	parsed, _ := url.Parse(server.URL)
-	service, err := NewServiceWithClient(t.TempDir(), server.Client(), []string{parsed.Hostname()})
+	service, err := NewServiceWithClient(t.TempDir(), server.Client(), []string{parsed.Hostname()}, server.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = service.VerifyAndCache(context.Background(), Request{ManifestURL: server.URL, Version: "v1.2.3", Target: "cloudflare"})
+	_, err = service.VerifyAndCache(context.Background(), Request{ManifestURL: server.URL + "/v1.2.3/release-manifest.json", Version: "v1.2.3", Target: "cloudflare"})
 	if err == nil || !strings.Contains(err.Error(), "safety limit") {
 		t.Fatalf("expected manifest size failure, got %v", err)
 	}
@@ -132,11 +132,11 @@ func TestRejectsRedirectToUntrustedHost(t *testing.T) {
 	}))
 	defer server.Close()
 	parsed, _ := url.Parse(server.URL)
-	service, err := NewServiceWithClient(t.TempDir(), server.Client(), []string{parsed.Hostname()})
+	service, err := NewServiceWithClient(t.TempDir(), server.Client(), []string{parsed.Hostname()}, server.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = service.VerifyAndCache(context.Background(), Request{ManifestURL: server.URL, Version: "v1.2.3", Target: "cloudflare"})
+	_, err = service.VerifyAndCache(context.Background(), Request{ManifestURL: server.URL + "/v1.2.3/release-manifest.json", Version: "v1.2.3", Target: "cloudflare"})
 	if err == nil || !strings.Contains(err.Error(), "untrusted release redirect") {
 		t.Fatalf("expected redirect rejection, got %v", err)
 	}
@@ -147,7 +147,7 @@ func TestRejectsNonCanonicalGitHubManifestPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = service.validateManifestURL("https://github.com/WranglerLabs/repo-wrangler/releases/latest/download/release-manifest.json", "v1.2.3")
+	_, err = service.validateManifestURL("https://github.com/WranglerLabs/repo-wrangler/releases/latest/download/release-manifest.json", "v1.2.3")
 	if err == nil || !strings.Contains(err.Error(), "official versioned") {
 		t.Fatalf("expected canonical path failure, got %v", err)
 	}

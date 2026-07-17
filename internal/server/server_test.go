@@ -12,6 +12,7 @@ import (
 	"testing/fstest"
 
 	"github.com/WranglerLabs/ranch-hand/internal/adapter"
+	"github.com/WranglerLabs/ranch-hand/internal/bundle"
 	"github.com/WranglerLabs/ranch-hand/internal/plan"
 	productrelease "github.com/WranglerLabs/ranch-hand/internal/release"
 )
@@ -25,6 +26,15 @@ type fakeReleaseVerifier struct {
 
 type fakeTargetPreflighter struct {
 	credentials adapter.Credentials
+}
+
+type fakeBundleStager struct {
+	artifact productrelease.VerifiedArtifact
+}
+
+func (f *fakeBundleStager) Stage(artifact productrelease.VerifiedArtifact) (bundle.StagedBundle, error) {
+	f.artifact = artifact
+	return bundle.StagedBundle{Product: productrelease.Product, Version: artifact.Version, Target: artifact.Target, Path: `C:\staged\compose`}, nil
 }
 
 func (f *fakeTargetPreflighter) Preflight(_ context.Context, candidate plan.DeploymentPlan, credentials adapter.Credentials) adapter.Report {
@@ -49,7 +59,8 @@ func TestCreateExportPreflightAndDryRunVerifiedPlan(t *testing.T) {
 	}
 	verifier := &fakeReleaseVerifier{cachePath: artifact}
 	targets := &fakeTargetPreflighter{}
-	h := NewWithDependencies("secret-token", "test", testUI(), verifier, targets)
+	stager := &fakeBundleStager{}
+	h := newWithServices("secret-token", "test", testUI(), verifier, targets, stager)
 	manifest := "https://github.com/WranglerLabs/repo-wrangler/releases/download/v1.2.3/release-manifest.json"
 	verifyBody := `{"manifestUrl":"` + manifest + `","version":"v1.2.3","target":"local-compose"}`
 	response := authorizedPost(h, "/api/v1/releases/verify", verifyBody)
@@ -92,6 +103,13 @@ func TestCreateExportPreflightAndDryRunVerifiedPlan(t *testing.T) {
 	}
 	if targets.credentials.SSHPassword != "runtime-only" {
 		t.Fatal("target adapter did not receive runtime credential")
+	}
+	response = authorizedPost(h, "/api/v1/bundles/stage", string(created.Plan))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"staged":true`) {
+		t.Fatalf("bundle staging returned %d: %s", response.Code, response.Body.String())
+	}
+	if stager.artifact.SHA256 == "" || stager.artifact.Target != "local-compose" {
+		t.Fatal("stager did not receive the verified artifact")
 	}
 }
 

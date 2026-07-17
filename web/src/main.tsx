@@ -34,6 +34,7 @@ type DeploymentPlan = {
 type PreflightReport = { ready: boolean; checks: { name: string; ok: boolean; message: string }[] };
 type DryRunReport = { mutated: boolean; steps: { order: number; description: string; mutates: boolean }[] };
 type TargetReport = { ready: boolean; target: string; checks: { name: string; ok: boolean; message: string }[] };
+type StagedBundle = { product: string; version: string; target: string; path: string; cacheHit: boolean };
 
 const targetFields: Record<string, { key: string; label: string; placeholder: string; optional?: boolean }[]> = {
   "azure-container-apps": [
@@ -122,6 +123,7 @@ function App() {
   const [targetReport, setTargetReport] = useState<TargetReport | null>(null);
   const [targetRunning, setTargetRunning] = useState(false);
   const [credentialEpoch, setCredentialEpoch] = useState(0);
+  const [stagedBundle, setStagedBundle] = useState<StagedBundle | null>(null);
 
   useEffect(() => {
     if (!token) {
@@ -140,6 +142,7 @@ function App() {
     setPreflight(null);
     setDryRun(null);
     setTargetReport(null);
+    setStagedBundle(null);
     try {
       const result = await api<{ verified: true; artifact: VerifiedArtifact }>("/api/v1/releases/verify", {
         method: "POST",
@@ -160,6 +163,7 @@ function App() {
     setPreflight(null);
     setDryRun(null);
     setTargetReport(null);
+    setStagedBundle(null);
     try {
       const cleaned = Object.fromEntries(Object.entries(configuration).filter(([, value]) => value.trim() !== ""));
       const result = await api<{ plan: DeploymentPlan }>("/api/v1/plans/create", {
@@ -176,7 +180,12 @@ function App() {
     if (!planResult) return;
     setPlanError("");
     try {
-      setPreflight(await api<PreflightReport>("/api/v1/plans/preflight", { method: "POST", body: JSON.stringify(planResult) }));
+      const report = await api<PreflightReport>("/api/v1/plans/preflight", { method: "POST", body: JSON.stringify(planResult) });
+      setPreflight(report);
+      if (report.ready) {
+        const staged = await api<{ staged: true; bundle: StagedBundle }>("/api/v1/bundles/stage", { method: "POST", body: JSON.stringify(planResult) });
+        setStagedBundle(staged.bundle);
+      }
       setDryRun(await api<DryRunReport>("/api/v1/plans/dry-run", { method: "POST", body: JSON.stringify(planResult) }));
     } catch (reason) {
       setPlanError(reason instanceof Error ? reason.message : "Preflight failed");
@@ -242,7 +251,7 @@ function App() {
         <p>Choose an explicit release and deployment target. Ranch Hand downloads only the published bundle, verifies its declared size and SHA-256, and stores the verified bytes in its local versioned cache.</p>
         <form onSubmit={verifyRelease}>
           <label>Release version<input required pattern="v[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9.-]+)?" placeholder="v1.0.8" value={version} onChange={(event) => setVersion(event.target.value)} /></label>
-          <label>Deployment target<select value={target} onChange={(event) => { setTarget(event.target.value); setArtifact(null); setPlanResult(null); setConfiguration({}); setRuntimeCredentials({}); setTargetReport(null); }}><option value="azure-container-apps">Azure Container Apps</option><option value="cloudflare">Cloudflare</option><option value="local-compose">Local Docker Compose</option><option value="remote-linux-compose">Remote Linux Compose</option></select></label>
+          <label>Deployment target<select value={target} onChange={(event) => { setTarget(event.target.value); setArtifact(null); setPlanResult(null); setConfiguration({}); setRuntimeCredentials({}); setTargetReport(null); setStagedBundle(null); }}><option value="azure-container-apps">Azure Container Apps</option><option value="cloudflare">Cloudflare</option><option value="local-compose">Local Docker Compose</option><option value="remote-linux-compose">Remote Linux Compose</option></select></label>
           <button type="submit" disabled={verifying || !token}>{verifying ? "Verifying and caching…" : "Verify and cache release"}</button>
         </form>
         {releaseError && <div className="inline-result error" role="alert"><strong>Release rejected</strong><p>{releaseError}</p></div>}
@@ -260,6 +269,7 @@ function App() {
         {planError && <div className="inline-result error" role="alert"><strong>Plan operation rejected</strong><p>{planError}</p></div>}
         {planResult && <div className="inline-result success"><strong>Versioned plan created</strong><p>This plan contains no credential fields and is bound to {planResult.release.version} / {planResult.target.kind}.</p><div className="button-row"><button type="button" onClick={runPreflight}>Preflight and dry run</button><button type="button" className="secondary" onClick={exportPlan}>Export JSON plan</button></div></div>}
         {preflight && <div className={`inline-result ${preflight.ready ? "success" : "error"}`}><strong>{preflight.ready ? "Preflight ready" : "Preflight blocked"}</strong><ul>{preflight.checks.map((check) => <li key={check.name}>{check.ok ? "✓" : "✕"} {check.message}</li>)}</ul></div>}
+        {stagedBundle && <div className="inline-result success"><strong>{stagedBundle.cacheHit ? "Verified staged bundle reused" : "Verified bundle staged"}</strong><p>Every extracted file is recorded by size and SHA-256 and will be rechecked before reuse.</p></div>}
         {dryRun && <div className="inline-result success"><strong>Dry run completed without changes</strong><ol>{dryRun.steps.map((step) => <li key={step.order}>{step.description}</li>)}</ol></div>}
         {dryRun && <form key={`${target}-${credentialEpoch}`} className="credential-form" onSubmit={runTargetPreflight}>
           <div className="form-intro"><strong>Live target preflight</strong><p>Ranch Hand connects through the platform's native API. Credentials are sent only to this loopback process, are excluded from the plan, and are cleared from the form after the check.</p></div>

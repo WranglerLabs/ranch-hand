@@ -45,6 +45,12 @@ The interface can run a separate live connectivity preflight after the offline c
 
 These checks do not shell out to Azure CLI, Wrangler CLI, a local Docker CLI, or OpenSSH. Azure and Cloudflare bearer tokens and SSH key/password material are submitted only to the loopback API, are never added to the plan or response, and are cleared from the form after each attempt. The current Azure preflight accepts a temporary ARM access token; integrated interactive Azure authentication remains part of the adapter work before RC.
 
+## Verified bundle staging
+
+Before an adapter can consume a release, Ranch Hand rehashes the cached archive and extracts it into a digest-addressed application cache. Extraction rejects absolute paths, traversal, links, special files, duplicate portable paths, oversized files, excessive entries, and excessive expanded size. Ranch Hand then validates `bundle.json` against the selected version and target, including the digest-pinned image and target-native HTTPS contract.
+
+The staging record contains the size and SHA-256 of every extracted file. Ranch Hand rehashes all staged files before reuse and rebuilds a staging directory from the verified archive if any file is missing, added, or changed. A staged directory is local execution material only; its path is never written into the portable deployment plan.
+
 ## Build from source
 
 Building is for contributors; ordinary operators will download a signed executable from a Ranch Hand release.

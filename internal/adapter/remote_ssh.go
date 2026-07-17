@@ -155,13 +155,20 @@ func (h *sshRemoteHost) Run(ctx context.Context, command string, stdin []byte) (
 		return "", err
 	}
 	defer session.Close()
+	// Keep the SSH execution request constant. Plan-derived values are validated
+	// and quoted by the typed operations that build command; transferring the
+	// resulting script over stdin prevents those values from becoming the SSH
+	// command itself. Optional file content is quoted as data and piped to the
+	// internal command, never concatenated unquoted into the script.
+	script := command + "\n"
 	if len(stdin) > 0 {
-		session.Stdin = bytes.NewReader(stdin)
+		script = "printf '%s' " + shellQuote(string(stdin)) + " | " + command + "\n"
 	}
+	session.Stdin = strings.NewReader(script)
 	output := &limitedOutput{maximum: 64 << 10}
 	session.Stdout = output
 	session.Stderr = output
-	if err := session.Start(command); err != nil {
+	if err := session.Start("sh -s"); err != nil {
 		return "", err
 	}
 	done := make(chan error, 1)

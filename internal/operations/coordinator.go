@@ -26,7 +26,7 @@ type stager interface {
 
 type Mutator interface {
 	Backup(context.Context, plan.DeploymentPlan, adapter.Credentials) (lifecycle.BackupArtifact, error)
-	Apply(context.Context, lifecycle.OperationKind, plan.DeploymentPlan, bundle.StagedBundle, adapter.Credentials) error
+	Apply(context.Context, lifecycle.OperationKind, plan.DeploymentPlan, bundle.StagedBundle, *lifecycle.BackupRecord, adapter.Credentials) error
 	Verify(context.Context, plan.DeploymentPlan, adapter.Credentials) error
 	Recover(context.Context, lifecycle.OperationKind, plan.DeploymentPlan, *lifecycle.BackupRecord, adapter.Credentials) error
 }
@@ -147,7 +147,7 @@ func (c *Coordinator) Run(ctx context.Context, request Request) (Result, error) 
 		return result, err
 	}
 	result.Journal = updated
-	if err := mutator.Apply(ctx, request.Kind, request.Plan, staged, request.Credentials); err != nil {
+	if err := mutator.Apply(ctx, request.Kind, request.Plan, staged, result.Backup, request.Credentials); err != nil {
 		return c.recover(ctx, request, mutator, result, fmt.Errorf("apply target release: %w", err))
 	}
 	updated, err = c.store.Transition(journal.DeploymentID, journal.OperationID, lifecycle.Applied)

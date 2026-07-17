@@ -2,7 +2,7 @@
 
 Ranch Hand is the standalone, Windows-first lifecycle manager for [RepoWrangler](https://github.com/WranglerLabs/repo-wrangler). It is for operators who want to install and manage RepoWrangler without cloning or forking its source repository. Contributors and advanced operators can still use RepoWrangler's documented deployment recipes directly.
 
-> **Status:** active implementation. The secure local application shell, immutable release verification/cache, secret-free plan creation/export, artifact preflight, non-mutating dry run, and live target-native connectivity preflight are working. Ranch Hand can install a loopback-only local Docker evaluation instance. The other target mutations and production lifecycle remain under implementation; this repository is not a production installer release.
+> **Status:** active implementation. The secure local application shell, immutable release verification/cache, secret-free plan creation/export, artifact preflight, non-mutating dry run, and live target-native connectivity preflight are working. Ranch Hand can install, consistently back up, and backup-first update a loopback-only local Docker evaluation instance. The other target mutations and production lifecycle remain under implementation; this repository is not a production installer release.
 
 ## First release scope
 
@@ -40,7 +40,9 @@ The interface requires an explicit confirmation and describes the current bounda
 
 The same coordinator can create a consistent local backup. Ranch Hand verifies the container and volume ownership labels, briefly stops the running container, streams `/app/data` through Docker's native archive API into its user-scoped backup directory, syncs and hashes the archive, restarts the container, and waits for readiness. The secret-free inventory records the relative locator, byte count, SHA-256, deployment, operation, and release. Local archives have a 64 GiB safety limit; a stopped container remains stopped.
 
-Update, restore, and production credential configuration for this target are not enabled yet. Manual clone/fork and custom automation remain supported RepoWrangler deployment options.
+Local updates are backup-first and copy-on-write. Ranch Hand verifies the current release identity and backup, pulls the new digest-pinned image, seeds a new owned volume from the archive, stops and preserves the prior container and volume under a deterministic rollback identity, then activates the new container. Readiness includes both `/health/ready` and an exact immutable version match from `/health/live`. Failed activation removes only the new owned container and restores the preserved prior container; migrations never touch the rollback volume.
+
+Explicit rollback, restore, rollback-pool retention controls, and production credential configuration for this target are not enabled yet. Manual clone/fork and custom automation remain supported RepoWrangler deployment options.
 
 ## Live target preflight
 
@@ -65,7 +67,7 @@ The staging record contains the size and SHA-256 of every extracted file. Ranch 
 
 Lifecycle mutations use a durable, secret-free journal keyed to the stable target environment. The journal permits one active operation per deployment, embeds the canonical plan snapshot, replaces every phase atomically, and detects corrupted phase history. An update cannot commit until backup, staging, apply, and health verification have all completed. If activation or verification fails, recovery is an explicit journaled path rather than an undocumented retry.
 
-The coordinator implements install, backup, and backup-first update sequencing. It binds `backup-complete` to an exact validated backup record, stages only the verified plan artifact, and automatically enters recovery if apply, health verification, or the post-apply journal write fails. The local Docker adapter is wired for the evaluation install and consistent backup described above; update, restore, and the other target mutations remain disabled. See [ADR-0002](docs/adr/0002-durable-lifecycle-transactions.md) for phase rules, recovery semantics, and trade-offs.
+The coordinator implements install, backup, and backup-first update sequencing. It binds `backup-complete` to an exact validated backup record, stages only the verified plan artifact, and automatically enters recovery if apply, health verification, or the post-apply journal write fails. The local Docker adapter is wired for the evaluation install, consistent backup, and copy-on-write update described above; explicit restore/rollback and the other target mutations remain disabled. See [ADR-0002](docs/adr/0002-durable-lifecycle-transactions.md) for phase rules, recovery semantics, and trade-offs.
 
 ## Build from source
 

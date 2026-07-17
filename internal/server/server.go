@@ -124,8 +124,8 @@ func (s *Server) runOperation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer request.Credentials.Clear()
-	if request.Plan.Target.Kind != "local-compose" || (request.Kind != lifecycle.Install && request.Kind != lifecycle.Backup) {
-		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "only local Docker install and backup are enabled in this build; other mutators remain under implementation"})
+	if request.Plan.Target.Kind != "local-compose" || (request.Kind != lifecycle.Install && request.Kind != lifecycle.Backup && request.Kind != lifecycle.Update) {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "only local Docker install, backup, and update are enabled in this build; other mutators remain under implementation"})
 		return
 	}
 	if err := request.Plan.Validate(); err != nil {
@@ -134,6 +134,10 @@ func (s *Server) runOperation(w http.ResponseWriter, r *http.Request) {
 	}
 	if request.Kind == lifecycle.Backup && request.FromVersion != request.Plan.Release.Version {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "local backup fromVersion must match the plan's explicit immutable release"})
+		return
+	}
+	if request.Kind == lifecycle.Update && (request.FromVersion == "" || request.FromVersion == request.Plan.Release.Version) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "local update requires the different explicit immutable version currently installed"})
 		return
 	}
 	verified, found := s.verifiedPlan(request.Plan)

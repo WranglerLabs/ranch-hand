@@ -2,7 +2,7 @@
 
 Ranch Hand is the standalone, Windows-first lifecycle manager for [RepoWrangler](https://github.com/WranglerLabs/repo-wrangler). It is for operators who want to install and manage RepoWrangler without cloning or forking its source repository. Contributors and advanced operators can still use RepoWrangler's documented deployment recipes directly.
 
-> **Status:** active implementation. The secure local application shell, immutable release verification/cache, secret-free plan creation/export, artifact preflight, non-mutating dry run, and live target-native connectivity preflight are working. Ranch Hand can install, consistently back up, and backup-first update a loopback-only local Docker evaluation instance, and can install dedicated Azure Container Apps and Cloudflare evaluation instances. The other target mutations and production lifecycle remain under implementation; this repository is not a production installer release.
+> **Status:** active implementation. The secure local application shell, immutable release verification/cache, secret-free plan creation/export, artifact preflight, non-mutating dry run, and live target-native connectivity preflight are working. Ranch Hand can install evaluation instances on all four initial targets; local Docker also supports consistent backup and backup-first update. Production lifecycle remains under implementation; this repository is not a production installer release.
 
 ## First release scope
 
@@ -60,6 +60,14 @@ The API token is held only in memory and must permit account reads, Workers Scri
 
 Failed-install recovery deletes the Worker only when its D1 binding and version match the marker-owned database, then deletes that exact database. Missing, ambiguous, or mismatched ownership evidence stops recovery without deleting anything. Existing Workers and databases, custom domains, production authentication secrets, backup, update, and rollback are not enabled in this adapter. See [ADR-0004](docs/adr/0004-dedicated-cloudflare-evaluation-boundary.md).
 
+## Remote Linux Compose evaluation install
+
+The first remote Linux mutator uses Ranch Hand's native SSH client; Windows does not need OpenSSH, WSL, Docker, Compose, or a Linux shell. The target Linux account must already be able to run Docker and Docker Compose v2. Live preflight pins the exact SSH host-key fingerprint, verifies the Linux Docker Engine and Compose, requires an unused project, and requires that the dedicated installation directory not exist while its parent is writable.
+
+Apply transfers the verified digest-pinned Compose file plus a generated evaluation-only override and `.env`. The override gives the server container and data volume stable names and exact Ranch Hand ownership/deployment/version labels. A secret-free marker records the release, artifact, immutable image, resource names, and SHA-256 of every transferred deployment file. RepoWrangler binds only to `127.0.0.1:8080` on the Linux host. Ranch Hand verifies the marker, file hashes, labels, image, running state, readiness, and release identity through an SSH-forwarded loopback connection.
+
+Failed-install recovery repeats every ownership and hash check, runs `docker compose down --volumes` only from the verified files, and removes only the four known files plus the empty dedicated directory. A missing or changed marker, file, container label, or volume label stops cleanup. The adapter does not expose a public port, install a proxy, adopt existing resources, write production secrets, back up, update, restore, or roll back. Operators can still deploy the published Compose bundle themselves and supply their own trusted ingress. See [ADR-0005](docs/adr/0005-dedicated-remote-linux-evaluation-boundary.md).
+
 ## Live target preflight
 
 The interface can run a separate live connectivity preflight after the offline checks succeed:
@@ -69,7 +77,7 @@ The interface can run a separate live connectivity preflight after the offline c
 | Azure Container Apps | Azure Resource Manager HTTPS API | Subscription access, `Microsoft.App` registration, and Azure-managed HTTPS contract |
 | Cloudflare | Cloudflare HTTPS API | Token and account access, workers.dev, and unused dedicated Worker/D1 names |
 | Local Docker Compose | Docker Engine API over the Windows named pipe or Unix socket | Engine health, API version, Linux-container mode, and loopback bundle contract |
-| Remote Linux Compose | Embedded Go SSH client | Pinned host identity, authentication, Linux Docker Engine, Compose v2, and operator-managed HTTPS boundary |
+| Remote Linux Compose | Embedded Go SSH client | Pinned host identity, Linux Docker/Compose, unused project, and dedicated directory |
 
 These checks do not shell out to Azure CLI, Wrangler CLI, a local Docker CLI, or OpenSSH. Azure and Cloudflare bearer tokens and SSH key/password material are submitted only to the loopback API, are never added to the plan or response, and are cleared from the form after each attempt. The current Azure preflight accepts a temporary ARM access token; integrated interactive Azure authentication remains part of the adapter work before RC.
 
@@ -83,7 +91,7 @@ The staging record contains the size and SHA-256 of every extracted file. Ranch 
 
 Lifecycle mutations use a durable, secret-free journal keyed to the stable target environment. The journal permits one active operation per deployment, embeds the canonical plan snapshot, replaces every phase atomically, and detects corrupted phase history. An update cannot commit until backup, staging, apply, and health verification have all completed. If activation or verification fails, recovery is an explicit journaled path rather than an undocumented retry.
 
-The coordinator implements install, backup, and backup-first update sequencing. It binds `backup-complete` to an exact validated backup record, stages only the verified plan artifact, and automatically enters recovery if apply, health verification, or the post-apply journal write fails. Recovery receives a cancellation-independent bounded context so a closed browser request cannot abandon a partially mutated target. The local Docker adapter is wired for evaluation install, consistent backup, and copy-on-write update; Azure Container Apps and Cloudflare are wired for the dedicated evaluation installs above. Explicit restore/rollback and remote Linux mutation remain disabled. See [ADR-0002](docs/adr/0002-durable-lifecycle-transactions.md) for phase rules, recovery semantics, and trade-offs.
+The coordinator implements install, backup, and backup-first update sequencing. It binds `backup-complete` to an exact validated backup record, stages only the verified plan artifact, and automatically enters recovery if apply, health verification, or the post-apply journal write fails. Recovery receives a cancellation-independent bounded context so a closed browser request cannot abandon a partially mutated target. All four initial targets are wired for the bounded evaluation installs above; local Docker also supports consistent backup and copy-on-write update. Explicit restore/rollback and the other production lifecycle mutations remain disabled. See [ADR-0002](docs/adr/0002-durable-lifecycle-transactions.md) for phase rules, recovery semantics, and trade-offs.
 
 ## Build from source
 

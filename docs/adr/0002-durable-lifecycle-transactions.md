@@ -95,6 +95,6 @@ A local journal adds code and durable-state compatibility requirements, but thos
 1. [x] Implement stable deployment identity, exclusive active-operation records, atomic transitions, plan snapshots, and event-chain validation.
 2. [x] Enforce backup-first update and operation-specific commit requirements.
 3. [x] Implement the lifecycle coordinator, exact-backup references, backup inventory, and automatic recovery sequencing.
-4. [ ] Implement target mutation methods and expose only coordinator-driven operations through the loopback API. Local Docker evaluation install, consistent backup, and copy-on-write update are complete; dedicated Azure Container Apps and Cloudflare evaluation installs are complete; explicit restore/rollback and remote Linux mutation remain.
+4. [x] Implement bounded evaluation install methods for all four initial targets and expose them only through coordinator-driven loopback operations. Local Docker consistent backup and copy-on-write update are also complete.
 5. [ ] Add active-operation resume/recover controls to the loopback API and Windows UI.
 6. [ ] Add installation records, rollback-pool retention, and journal schema migration policy.

@@ -87,6 +87,26 @@ func TestRejectsUnsafeCloudflareIdentifiers(t *testing.T) {
 	}
 }
 
+func TestValidatesRemoteLinuxBoundary(t *testing.T) {
+	var candidate DeploymentPlan
+	if err := json.Unmarshal([]byte(validPlan), &candidate); err != nil {
+		t.Fatal(err)
+	}
+	candidate.Target.Kind = "remote-linux-compose"
+	candidate.Configuration = map[string]string{
+		"host": "server.example.com", "port": "22", "user": "repo-wrangler", "installDirectory": "/opt/repo-wrangler",
+		"projectName": "repo-wrangler", "hostKeySha256": "SHA256:" + "Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	if err := candidate.Validate(); err != nil {
+		t.Fatalf("valid remote Linux boundary rejected: %v", err)
+	}
+	candidate.Configuration["installDirectory"] = "/"
+	candidate.Configuration["hostKeySha256"] = "accept-any-host"
+	if err := candidate.Validate(); err == nil {
+		t.Fatal("unsafe remote Linux path and host fingerprint were accepted")
+	}
+}
+
 func TestRejectsUnknownConfigurationField(t *testing.T) {
 	var candidate DeploymentPlan
 	if err := json.Unmarshal([]byte(validPlan), &candidate); err != nil {

@@ -95,9 +95,9 @@ func DryRun(candidate DeploymentPlan) (DryRunReport, error) {
 			"Request runtime secrets at apply time, create the project, and verify loopback or operator-provided HTTPS ingress.",
 		},
 		"remote-linux-compose": {
-			"Verify the pinned SSH host identity and inspect the remote Docker Engine and installation directory.",
-			"Transfer the verified Compose bundle and resolve its immutable image digest without source checkout.",
-			"Request runtime secrets at apply time, activate the remote project, and verify the operator-provided trusted HTTPS ingress.",
+			"Verify the pinned SSH host identity, Linux Docker Engine, Docker Compose v2, unused project, and dedicated installation directory.",
+			"Transfer the verified Compose bundle, evaluation environment, Docker ownership labels, and target-side marker without source checkout.",
+			"Request SSH credentials at apply time, activate the loopback-only project, and verify readiness and release identity through the pinned SSH connection.",
 		},
 	}
 	report := DryRunReport{Target: candidate.Target.Kind, Mutated: false}

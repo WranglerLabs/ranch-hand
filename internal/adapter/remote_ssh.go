@@ -1,11 +1,14 @@
 package adapter
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -14,57 +17,98 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-type RemoteLinuxCompose struct{}
+type remoteHost interface {
+	Run(context.Context, string, []byte) (string, error)
+	Health(context.Context, string) (int, []byte, error)
+	Close() error
+}
 
-func NewRemoteLinuxCompose() *RemoteLinuxCompose { return &RemoteLinuxCompose{} }
+type remoteConnector func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error)
+
+type RemoteLinuxCompose struct {
+	connect remoteConnector
+}
+
+func NewRemoteLinuxCompose() *RemoteLinuxCompose {
+	return &RemoteLinuxCompose{connect: connectRemoteLinux}
+}
+
+func newRemoteLinuxCompose(connect remoteConnector) *RemoteLinuxCompose {
+	return &RemoteLinuxCompose{connect: connect}
+}
 
 func (a *RemoteLinuxCompose) Preflight(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) Report {
 	report := Report{Target: candidate.Target.Kind}
-	auth, err := sshAuthentication(credentials)
-	if err != nil {
-		appendCheck(&report, "ssh-authentication", false, err.Error())
+	if err := candidate.Validate(); err != nil {
+		appendCheck(&report, "remote-plan", false, err.Error())
 		return report
 	}
-	expectedFingerprint := candidate.Configuration["hostKeySha256"]
-	config := &ssh.ClientConfig{
-		User: candidate.Configuration["user"], Auth: auth, Timeout: 30 * time.Second,
-		HostKeyCallback: pinnedHostKey(expectedFingerprint),
-	}
-	address := net.JoinHostPort(candidate.Configuration["host"], candidate.Configuration["port"])
-	dialer := &net.Dialer{Timeout: 30 * time.Second}
-	connection, err := dialer.DialContext(ctx, "tcp", address)
+	host, err := a.connect(ctx, candidate, credentials)
 	if err != nil {
-		appendCheck(&report, "ssh-connection", false, "Ranch Hand could not reach the remote SSH service: "+err.Error())
+		appendCheck(&report, "ssh-host-identity", false, err.Error())
 		return report
 	}
-	defer connection.Close()
-	_ = connection.SetDeadline(time.Now().Add(30 * time.Second))
-	clientConnection, channels, requests, err := ssh.NewClientConn(connection, address, config)
-	if err != nil {
-		appendCheck(&report, "ssh-host-identity", false, "SSH authentication or pinned host identity verification failed: "+err.Error())
-		return report
-	}
-	client := ssh.NewClient(clientConnection, channels, requests)
-	defer client.Close()
+	defer host.Close()
 	appendCheck(&report, "ssh-host-identity", true, "Ranch Hand connected through native SSH and verified the pinned host identity.")
 
-	_ = connection.SetDeadline(time.Now().Add(30 * time.Second))
-	dockerVersion, err := remoteCommand(client, `docker version --format '{{.Server.Version}}/{{.Server.Os}}/{{.Server.Arch}}'`)
+	dockerVersion, err := host.Run(ctx, `docker version --format '{{.Server.Version}}/{{.Server.Os}}/{{.Server.Arch}}'`, nil)
 	if err != nil || !strings.Contains(dockerVersion, "/linux/") {
 		appendCheck(&report, "remote-docker-engine", false, "The remote account cannot reach a Linux Docker Engine.")
 		return report
 	}
 	appendCheck(&report, "remote-docker-engine", true, "The remote account can reach a Linux Docker Engine ("+dockerVersion+").")
-	_ = connection.SetDeadline(time.Now().Add(30 * time.Second))
-	composeVersion, err := remoteCommand(client, `docker compose version --short`)
+	composeVersion, err := host.Run(ctx, `docker compose version --short`, nil)
 	if err != nil || composeVersion == "" {
 		appendCheck(&report, "remote-docker-compose", false, "Docker Compose v2 is not available to the remote account.")
 		return report
 	}
 	appendCheck(&report, "remote-docker-compose", true, "Docker Compose v2 is available ("+composeVersion+").")
-	appendCheck(&report, "compose-https-boundary", true, "The verified bundle contains no proxy; public HTTPS remains an explicit operator-managed ingress.")
+	directory := shellQuote(candidate.Configuration["installDirectory"])
+	if _, err := host.Run(ctx, "test ! -e "+directory+" && test -d "+shellQuote(filepathParent(candidate.Configuration["installDirectory"]))+" && test -w "+shellQuote(filepathParent(candidate.Configuration["installDirectory"])), nil); err != nil {
+		appendCheck(&report, "remote-install-directory", false, "The dedicated installation directory already exists or its parent is not writable.")
+		return report
+	}
+	appendCheck(&report, "remote-install-directory", true, "The dedicated installation directory is unused and its parent is writable.")
+	project := shellQuote(candidate.Configuration["projectName"])
+	containers, err := host.Run(ctx, "docker ps --all --quiet --filter label=com.docker.compose.project="+project, nil)
+	if err != nil || containers != "" {
+		appendCheck(&report, "remote-compose-boundary", false, "The requested remote Compose project already has containers or cannot be inspected.")
+		return report
+	}
+	volumes, err := host.Run(ctx, "docker volume ls --quiet --filter label=com.docker.compose.project="+project, nil)
+	if err != nil || volumes != "" {
+		appendCheck(&report, "remote-compose-boundary", false, "The requested remote Compose project already has volumes or cannot be inspected.")
+		return report
+	}
+	appendCheck(&report, "remote-compose-boundary", true, "The requested Compose project has no existing containers or volumes.")
+	appendCheck(&report, "compose-https-boundary", true, "The evaluation install remains loopback-only on the Linux host and contains no proxy or public ingress.")
 	report.Ready = true
 	return report
+}
+
+func connectRemoteLinux(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) (remoteHost, error) {
+	auth, err := sshAuthentication(credentials)
+	if err != nil {
+		return nil, err
+	}
+	address := net.JoinHostPort(candidate.Configuration["host"], candidate.Configuration["port"])
+	config := &ssh.ClientConfig{
+		User: candidate.Configuration["user"], Auth: auth, Timeout: 30 * time.Second,
+		HostKeyCallback: pinnedHostKey(candidate.Configuration["hostKeySha256"]),
+	}
+	dialer := &net.Dialer{Timeout: 30 * time.Second}
+	connection, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return nil, errors.New("Ranch Hand could not reach the remote SSH service")
+	}
+	_ = connection.SetDeadline(time.Now().Add(30 * time.Second))
+	clientConnection, channels, requests, err := ssh.NewClientConn(connection, address, config)
+	if err != nil {
+		_ = connection.Close()
+		return nil, errors.New("SSH authentication or pinned host identity verification failed")
+	}
+	_ = connection.SetDeadline(time.Time{})
+	return &sshRemoteHost{client: ssh.NewClient(clientConnection, channels, requests), connection: connection}, nil
 }
 
 func pinnedHostKey(expectedFingerprint string) ssh.HostKeyCallback {
@@ -100,20 +144,87 @@ func sshAuthentication(credentials Credentials) ([]ssh.AuthMethod, error) {
 	return methods, nil
 }
 
-func remoteCommand(client *ssh.Client, command string) (string, error) {
-	session, err := client.NewSession()
+type sshRemoteHost struct {
+	client     *ssh.Client
+	connection net.Conn
+}
+
+func (h *sshRemoteHost) Run(ctx context.Context, command string, stdin []byte) (string, error) {
+	session, err := h.client.NewSession()
 	if err != nil {
 		return "", err
 	}
 	defer session.Close()
+	if len(stdin) > 0 {
+		session.Stdin = bytes.NewReader(stdin)
+	}
 	output := &limitedOutput{maximum: 64 << 10}
 	session.Stdout = output
 	session.Stderr = output
-	err = session.Run(command)
+	if err := session.Start(command); err != nil {
+		return "", err
+	}
+	done := make(chan error, 1)
+	go func() { done <- session.Wait() }()
+	select {
+	case err = <-done:
+	case <-ctx.Done():
+		_ = session.Close()
+		<-done
+		err = ctx.Err()
+	}
 	if output.truncated {
 		return "", fmt.Errorf("remote command output exceeded 64 KiB")
 	}
 	return strings.TrimSpace(output.String()), err
+}
+
+func (h *sshRemoteHost) Health(ctx context.Context, requestPath string) (int, []byte, error) {
+	const address = "127.0.0.1:8080"
+	connection, err := h.client.Dial("tcp", address)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer connection.Close()
+	deadline := time.Now().Add(30 * time.Second)
+	if value, ok := ctx.Deadline(); ok && value.Before(deadline) {
+		deadline = value
+	}
+	_ = connection.SetDeadline(deadline)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+requestPath, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	request.Header.Set("Connection", "close")
+	if err := request.Write(connection); err != nil {
+		return 0, nil, err
+	}
+	response, err := http.ReadResponse(bufio.NewReader(connection), request)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxControlPlaneResponse+1))
+	if err != nil || len(body) > maxControlPlaneResponse {
+		return response.StatusCode, nil, errors.New("remote health response exceeded the safety limit")
+	}
+	return response.StatusCode, body, nil
+}
+
+func (h *sshRemoteHost) Close() error {
+	clientErr := h.client.Close()
+	connectionErr := h.connection.Close()
+	return errors.Join(clientErr, connectionErr)
+}
+
+func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }
+
+func filepathParent(value string) string {
+	index := strings.LastIndex(value, "/")
+	if index <= 0 {
+		return "/"
+	}
+	return value[:index]
 }
 
 type limitedOutput struct {

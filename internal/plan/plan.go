@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -54,6 +56,10 @@ var (
 	cloudflareAccountPattern  = regexp.MustCompile(`^[a-fA-F0-9]{32}$`)
 	cloudflareWorkerPattern   = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 	cloudflareDatabasePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+	remoteHostPattern         = regexp.MustCompile(`(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$`)
+	remoteUserPattern         = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+	remotePathPattern         = regexp.MustCompile(`^/(?:[A-Za-z0-9._-]+/)+[A-Za-z0-9._-]+$`)
+	sshFingerprintPattern     = regexp.MustCompile(`^SHA256:[A-Za-z0-9+/]{43}$`)
 )
 
 var configurationFields = map[string]map[string]bool{
@@ -229,6 +235,34 @@ func (p DeploymentPlan) Validate() error {
 		}
 		if !cloudflareDatabasePattern.MatchString(p.Configuration["databaseName"]) {
 			return errors.New("cloudflare databaseName must use lowercase letters, numbers, underscore, or hyphen")
+		}
+	}
+	if p.Target.Kind == "remote-linux-compose" {
+		host := p.Configuration["host"]
+		if net.ParseIP(host) == nil && !remoteHostPattern.MatchString(host) {
+			return errors.New("remote-linux-compose host must be an IP address or DNS hostname")
+		}
+		port, err := strconv.Atoi(p.Configuration["port"])
+		if err != nil || port < 1 || port > 65535 {
+			return errors.New("remote-linux-compose port must be from 1 through 65535")
+		}
+		if !remoteUserPattern.MatchString(p.Configuration["user"]) {
+			return errors.New("remote-linux-compose user must be a safe Linux account name")
+		}
+		directory := p.Configuration["installDirectory"]
+		if len(directory) > 200 || path.Clean(directory) != directory || !remotePathPattern.MatchString(directory) {
+			return errors.New("remote-linux-compose installDirectory must be a normalized absolute path with at least two safe segments")
+		}
+		for _, component := range strings.Split(strings.TrimPrefix(directory, "/"), "/") {
+			if component == "." || component == ".." {
+				return errors.New("remote-linux-compose installDirectory cannot contain dot segments")
+			}
+		}
+		if !dockerProjectPattern.MatchString(p.Configuration["projectName"]) {
+			return errors.New("remote-linux-compose projectName must use lowercase letters, numbers, underscore, or hyphen")
+		}
+		if !sshFingerprintPattern.MatchString(p.Configuration["hostKeySha256"]) {
+			return errors.New("remote-linux-compose hostKeySha256 must be an SHA-256 SSH fingerprint")
 		}
 	}
 	return nil

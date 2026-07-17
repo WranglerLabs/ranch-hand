@@ -1,12 +1,15 @@
-name: Release artifacts
+name: Unsigned release candidate
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      version:
+        description: Unsigned release-candidate version (for example v0.1.0-rc.1)
+        required: true
+        type: string
 
 permissions:
-  contents: write
+  contents: read
   id-token: write
   attestations: write
 
@@ -30,22 +33,59 @@ jobs:
         run: go test ./...
       - name: Build portable executable
         shell: pwsh
+        env:
+          CANDIDATE_VERSION: ${{ inputs.version }}
         run: |
+          $version = $env:CANDIDATE_VERSION
+          if ($version -notmatch '^v0\.1\.0-rc\.[1-9][0-9]*$') {
+            throw "Unsigned candidate version must match v0.1.0-rc.N"
+          }
           New-Item -ItemType Directory -Force dist | Out-Null
-          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { '0.1.0-dev' }
-          go build -trimpath -ldflags "-s -w -X main.version=$version" -o dist/ranch-hand-windows-amd64.exe ./cmd/ranch-hand
-          (Get-FileHash dist/ranch-hand-windows-amd64.exe -Algorithm SHA256).Hash.ToLower() + '  ranch-hand-windows-amd64.exe' | Set-Content dist/ranch-hand-windows-amd64.exe.sha256 -Encoding ascii
+          $asset = "ranch-hand-$version-windows-amd64.exe"
+          go build -trimpath -ldflags "-s -w -X main.version=$version" -o "dist/$asset" ./cmd/ranch-hand
+          (Get-FileHash "dist/$asset" -Algorithm SHA256).Hash.ToLower() + "  $asset" | Set-Content "dist/$asset.sha256" -Encoding ascii
+      - name: Smoke test candidate executable
+        shell: pwsh
+        env:
+          CANDIDATE_VERSION: ${{ inputs.version }}
+        run: |
+          $version = $env:CANDIDATE_VERSION
+          $asset = Resolve-Path "dist/ranch-hand-$version-windows-amd64.exe"
+          $stdout = Join-Path $env:RUNNER_TEMP 'ranch-hand-rc.stdout'
+          $stderr = Join-Path $env:RUNNER_TEMP 'ranch-hand-rc.stderr'
+          $env:RANCH_HAND_NO_BROWSER = '1'
+          $process = Start-Process -FilePath $asset -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          try {
+            Start-Sleep -Seconds 2
+            $ready = Get-Content $stdout | Where-Object { $_ -match "^Ranch Hand $([regex]::Escape($version)) is ready on " } | Select-Object -First 1
+            $launch = Get-Content $stdout | Where-Object { $_ -match '^Test launch URL: ' } | Select-Object -First 1
+            if (-not $ready -or -not $launch) { throw "Candidate did not become ready: $(Get-Content $stderr -Raw)" }
+            $base = ($ready -split 'is ready on ')[1].Trim()
+            $token = [Uri]::UnescapeDataString(($launch -split '#token=')[1].Trim())
+            $health = Invoke-RestMethod -Uri ($base + 'health/live') -TimeoutSec 5
+            $status = Invoke-RestMethod -Uri ($base + 'api/v1/status') -Headers @{ Authorization = "Bearer $token" } -TimeoutSec 5
+            if ($health.ok -ne $true -or $status.version -ne $version -or $status.platform -ne 'windows/amd64') { throw 'Candidate health, version, or platform identity failed' }
+          } finally {
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+            Remove-Item Env:RANCH_HAND_NO_BROWSER -ErrorAction SilentlyContinue
+          }
+      - name: Generate executable SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          file: dist/ranch-hand-${{ inputs.version }}-windows-amd64.exe
+          format: spdx-json
+          output-file: dist/ranch-hand-${{ inputs.version }}-windows-amd64.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
       - name: Attest executable
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: dist/ranch-hand-windows-amd64.exe
+          subject-path: |
+            dist/ranch-hand-${{ inputs.version }}-windows-amd64.exe
+            dist/ranch-hand-${{ inputs.version }}-windows-amd64.spdx.json
       - uses: actions/upload-artifact@v4
         with:
-          name: ranch-hand-windows-amd64
+          name: ranch-hand-${{ inputs.version }}-windows-amd64-unsigned
           path: dist/*
           if-no-files-found: error
-      - name: Upload tagged release assets
-        if: github.ref_type == 'tag'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload $env:GITHUB_REF_NAME dist/* --clobber
+          retention-days: 30

@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Ranch Hand has not issued a generally available release. Security fixes will apply to the newest published release once releases begin.
+Ranch Hand has not issued a generally available release. Unsigned release candidates are evaluation artifacts, not supported production releases. Security fixes will apply to the newest published release once trusted releases begin.
 
 ## Reporting a vulnerability
 

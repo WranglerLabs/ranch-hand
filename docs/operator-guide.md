@@ -12,8 +12,8 @@ its [manual deployment recipes](https://github.com/WranglerLabs/repo-wrangler/tr
 ## Current availability
 
 There is no signed public Ranch Hand installer yet. `v0.1.0-rc.1` is an unsigned
-evaluation candidate stored as a temporary GitHub Actions artifact, not a Git tag
-or GitHub Release. It expires on **2026-08-16 at 09:11:16 UTC**.
+evaluation candidate published as a stable prerelease download. It is not a
+generally available or production release.
 
 Use it only on an explicitly authorized evaluation target. Windows SmartScreen or
 organizational application-control policy may warn or block it. Do not bypass an
@@ -21,12 +21,10 @@ organizational security policy.
 
 ## Download and verify the evaluation candidate
 
-1. Sign in to GitHub and open
-   [workflow run 29568948879](https://github.com/WranglerLabs/ranch-hand/actions/runs/29568948879).
-2. In **Artifacts**, download
-   `ranch-hand-v0.1.0-rc.1-windows-amd64-unsigned` and extract the ZIP into a new
-   local folder.
-3. In PowerShell, verify the executable before running it:
+1. Open the public [Ranch Hand for Windows guide](https://wranglerlabs.org/ranch-hand)
+   and select **Download Ranch Hand v0.1.0-rc.1 for Windows (64-bit)**. A GitHub
+   account is not required.
+2. In PowerShell, verify the executable before running it:
 
    ```powershell
    Get-FileHash .\ranch-hand-v0.1.0-rc.1-windows-amd64.exe -Algorithm SHA256
@@ -41,7 +39,7 @@ organizational security policy.
 
    Expected Authenticode status: `NotSigned`.
 
-4. For GitHub provenance verification, install GitHub CLI if desired and run:
+3. For optional GitHub provenance verification, install GitHub CLI and run:
 
    ```powershell
    gh attestation verify .\ranch-hand-v0.1.0-rc.1-windows-amd64.exe `

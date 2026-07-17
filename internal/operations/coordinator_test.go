@@ -106,6 +106,19 @@ func coordinatorForTest(t *testing.T, mutator *fakeMutator, staged *fakeStager) 
 	return coordinator
 }
 
+func coordinatorAndStoreForTest(t *testing.T, mutator *fakeMutator, staged *fakeStager) (*Coordinator, *lifecycle.Store) {
+	t.Helper()
+	store, err := lifecycle.NewStore(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := NewCoordinator(store, staged, NewRegistry(map[string]Mutator{"local-compose": mutator}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return coordinator, store
+}
+
 func seedInstalledVersion(t *testing.T, coordinator *Coordinator, mutator *fakeMutator, staged *fakeStager, version string) {
 	t.Helper()
 	candidate := operationPlan(version)
@@ -268,5 +281,61 @@ func TestAppliedJournalFailureTriggersRecovery(t *testing.T) {
 	result, err := coordinator.Run(context.Background(), Request{Kind: lifecycle.Install, Plan: candidate, Artifact: operationArtifact(candidate)})
 	if err == nil || !result.Recovered || !strings.Contains(strings.Join(mutator.calls, ","), "recover") {
 		t.Fatalf("journal failure after apply did not recover target: %+v, %v, calls=%v", result, err, mutator.calls)
+	}
+}
+
+func TestRecoverActiveSafelyClosesPreApplyOperation(t *testing.T) {
+	mutator := &fakeMutator{}
+	coordinator, store := coordinatorAndStoreForTest(t, mutator, &fakeStager{})
+	journal, err := store.Begin(lifecycle.Install, operationPlan("v1.2.3"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := coordinator.RecoverActive(context.Background(), journal.DeploymentID, adapter.Credentials{})
+	if err != nil || !result.SafelyClosed || result.Journal.Phase != lifecycle.Failed || len(mutator.calls) != 0 {
+		t.Fatalf("pre-apply operation was not safely closed: %+v, %v, calls=%v", result, err, mutator.calls)
+	}
+}
+
+func TestRecoverActiveReplaysTargetRecoveryAfterApplyMayHaveStarted(t *testing.T) {
+	mutator := &fakeMutator{}
+	coordinator, store := coordinatorAndStoreForTest(t, mutator, &fakeStager{})
+	journal, err := store.Begin(lifecycle.Install, operationPlan("v1.2.3"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err = store.Transition(journal.DeploymentID, journal.OperationID, lifecycle.Staged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := coordinator.RecoverActive(context.Background(), journal.DeploymentID, adapter.Credentials{})
+	if err != nil || !result.Recovered || result.Journal.Phase != lifecycle.Recovered || strings.Join(mutator.calls, ",") != "recover" {
+		t.Fatalf("active target recovery failed: %+v, %v, calls=%v", result, err, mutator.calls)
+	}
+}
+
+func TestRecoverActiveFailureRemainsLockedAndCanBeRetried(t *testing.T) {
+	mutator := &fakeMutator{recoverError: errors.New("temporary target failure")}
+	coordinator, store := coordinatorAndStoreForTest(t, mutator, &fakeStager{})
+	journal, err := store.Begin(lifecycle.Install, operationPlan("v1.2.3"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err = store.Transition(journal.DeploymentID, journal.OperationID, lifecycle.Staged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := coordinator.RecoverActive(context.Background(), journal.DeploymentID, adapter.Credentials{})
+	if err == nil || result.Journal.Phase != lifecycle.RecoveryStarted {
+		t.Fatalf("failed recovery did not remain retryable: %+v, %v", result, err)
+	}
+	active, activeErr := store.Active(journal.DeploymentID)
+	if activeErr != nil || active.Phase != lifecycle.RecoveryStarted {
+		t.Fatalf("failed recovery released its durable lock: %+v, %v", active, activeErr)
+	}
+	mutator.recoverError = nil
+	result, err = coordinator.RecoverActive(context.Background(), journal.DeploymentID, adapter.Credentials{})
+	if err != nil || !result.Recovered || result.Journal.Phase != lifecycle.Recovered || strings.Join(mutator.calls, ",") != "recover,recover" {
+		t.Fatalf("retry did not complete recovery: %+v, %v, calls=%v", result, err, mutator.calls)
 	}
 }

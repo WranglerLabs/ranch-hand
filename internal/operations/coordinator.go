@@ -20,6 +20,7 @@ type journalStore interface {
 	TransitionWithReference(string, string, lifecycle.Phase, string) (lifecycle.Journal, error)
 	RecordBackup(lifecycle.Journal, lifecycle.BackupArtifact) (lifecycle.BackupRecord, error)
 	Backup(string, string) (lifecycle.BackupRecord, error)
+	Active(string) (lifecycle.Journal, error)
 }
 
 type stager interface {
@@ -64,6 +65,80 @@ type Result struct {
 	Backup         *lifecycle.BackupRecord `json:"backup,omitempty"`
 	SelectedBackup *lifecycle.BackupRecord `json:"selectedBackup,omitempty"`
 	Recovered      bool                    `json:"recovered"`
+	SafelyClosed   bool                    `json:"safelyClosed"`
+}
+
+func (c *Coordinator) RecoverActive(ctx context.Context, deploymentID string, credentials adapter.Credentials) (Result, error) {
+	defer credentials.Clear()
+	if ctx == nil {
+		return Result{}, errors.New("recovery context is required")
+	}
+	if err := credentials.Validate(); err != nil {
+		return Result{}, err
+	}
+	journal, err := c.store.Active(deploymentID)
+	if err != nil {
+		return Result{}, err
+	}
+	result := Result{Journal: journal}
+	if journal.Phase == lifecycle.Prepared || journal.Phase == lifecycle.BackupComplete {
+		closed, err := c.store.Transition(journal.DeploymentID, journal.OperationID, lifecycle.Failed)
+		if err == nil {
+			result.Journal = closed
+			result.SafelyClosed = true
+		}
+		return result, err
+	}
+	candidate, err := plan.DecodeAndValidate(journal.Plan)
+	if err != nil {
+		return result, errors.New("active operation plan snapshot is invalid")
+	}
+	mutator, ok := c.targets.Target(journal.Target)
+	if !ok {
+		return result, fmt.Errorf("no lifecycle mutator is registered for target %q", journal.Target)
+	}
+	backups := lifecycle.OperationBackups{}
+	if journal.InputBackupID != "" {
+		selected, err := c.store.Backup(journal.DeploymentID, journal.InputBackupID)
+		if err != nil {
+			return result, fmt.Errorf("load active operation input backup: %w", err)
+		}
+		backups.Selected = &selected
+	}
+	for _, event := range journal.Events {
+		if event.Phase == lifecycle.BackupComplete {
+			safety, err := c.store.Backup(journal.DeploymentID, event.ReferenceID)
+			if err != nil {
+				return result, fmt.Errorf("load active operation safety backup: %w", err)
+			}
+			backups.Safety = &safety
+		}
+	}
+	if journal.Phase != lifecycle.RecoveryStarted {
+		if journal.Phase != lifecycle.Staged && journal.Phase != lifecycle.Applied && journal.Phase != lifecycle.Verified {
+			return result, fmt.Errorf("active operation in phase %s cannot enter recovery", journal.Phase)
+		}
+		referenceID := ""
+		if backups.Safety != nil {
+			referenceID = backups.Safety.BackupID
+		}
+		journal, err = c.store.TransitionWithReference(journal.DeploymentID, journal.OperationID, lifecycle.RecoveryStarted, referenceID)
+		if err != nil {
+			return result, err
+		}
+		result.Journal = journal
+	}
+	recoveryContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 35*time.Minute)
+	defer cancel()
+	if err := mutator.Recover(recoveryContext, journal.Kind, candidate, journal.FromVersion, backups, credentials); err != nil {
+		return result, fmt.Errorf("recover active target: %w; operation remains locked in recovery-started for retry", err)
+	}
+	recovered, err := c.store.Transition(journal.DeploymentID, journal.OperationID, lifecycle.Recovered)
+	if err == nil {
+		result.Journal = recovered
+		result.Recovered = true
+	}
+	return result, err
 }
 
 type Coordinator struct {
@@ -223,10 +298,7 @@ func (c *Coordinator) recover(ctx context.Context, request Request, mutator Muta
 	result.Journal = journal
 	backups := lifecycle.OperationBackups{Selected: result.SelectedBackup, Safety: result.Backup}
 	if err := mutator.Recover(recoveryContext, request.Kind, request.Plan, request.FromVersion, backups, request.Credentials); err != nil {
-		if failed, failErr := c.store.Transition(result.Journal.DeploymentID, result.Journal.OperationID, lifecycle.Failed); failErr == nil {
-			result.Journal = failed
-		}
-		return result, errors.Join(operationErr, fmt.Errorf("recover target: %w", err))
+		return result, errors.Join(operationErr, fmt.Errorf("recover target: %w; operation remains locked in recovery-started for retry", err))
 	}
 	recovered, transitionErr := c.store.Transition(result.Journal.DeploymentID, result.Journal.OperationID, lifecycle.Recovered)
 	if transitionErr == nil {

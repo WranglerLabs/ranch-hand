@@ -38,6 +38,7 @@ type StagedBundle = { product: string; version: string; target: string; path: st
 type OperationResult = { completed: boolean; operation: { journal: { phase: string }; backup?: { artifact: { locator: string; size: number; sha256: string } } } };
 type InstallationRecord = { deploymentId: string; target: string; state: "active" | "uninstalled"; version: string; plan: DeploymentPlan; updatedAt: string };
 type BackupRecord = { backupId: string; deploymentId: string; target: string; version: string; createdAt: string; artifact: { locator: string; size: number; sha256: string } };
+type ActiveOperation = { deploymentId: string; operationId: string; kind: string; target: string; fromVersion?: string; toVersion: string; phase: string; updatedAt: string };
 
 const targetFields: Record<string, { key: string; label: string; placeholder: string; optional?: boolean }[]> = {
   "azure-container-apps": [
@@ -140,6 +141,10 @@ function App() {
   const [operationAzureToken, setOperationAzureToken] = useState("");
   const [operationCloudflareToken, setOperationCloudflareToken] = useState("");
   const [operationSSHCredentials, setOperationSSHCredentials] = useState<Record<string, string>>({});
+  const [activeOperations, setActiveOperations] = useState<ActiveOperation[]>([]);
+  const [recoveryCredentials, setRecoveryCredentials] = useState<Record<string, Record<string, string>>>({});
+  const [recoveringDeployment, setRecoveringDeployment] = useState("");
+  const [recoveryMessage, setRecoveryMessage] = useState("");
 
   useEffect(() => {
     if (!token) {
@@ -147,7 +152,43 @@ function App() {
       return;
     }
     api<Status>("/api/v1/status").then(setStatus).catch((reason: Error) => setError(reason.message));
+    refreshActiveOperations();
   }, []);
+
+  async function refreshActiveOperations() {
+    try {
+      const result = await api<{ operations: ActiveOperation[] }>("/api/v1/operations/active");
+      setActiveOperations(result.operations);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Active operation inventory failed");
+    }
+  }
+
+  async function recoverActiveOperation(operation: ActiveOperation) {
+    setRecoveringDeployment(operation.deploymentId);
+    setRecoveryMessage("");
+    try {
+      const result = await api<{ completed: boolean; operation: { recovered: boolean; safelyClosed: boolean } }>(`/api/v1/operations/${operation.deploymentId}/recover`, {
+        method: "POST",
+        body: JSON.stringify({ credentials: recoveryCredentials[operation.deploymentId] || {} }),
+      });
+      setRecoveryMessage(result.operation.safelyClosed ? "The pre-apply operation was safely closed." : "Target recovery completed and the operation lock was released.");
+      setRecoveryCredentials((current) => ({ ...current, [operation.deploymentId]: {} }));
+      await refreshActiveOperations();
+    } catch (reason) {
+      setRecoveryMessage(reason instanceof Error ? reason.message : "Active operation recovery failed");
+    } finally {
+      setRecoveringDeployment("");
+    }
+  }
+
+  function recoveryCredentialsReady(operation: ActiveOperation, values: Record<string, string>) {
+    if (operation.phase === "prepared" || operation.phase === "backup-complete" || operation.target === "local-compose") return true;
+    if (operation.target === "azure-container-apps") return Boolean(values.azureAccessToken?.trim());
+    if (operation.target === "cloudflare") return Boolean(values.cloudflareApiToken?.trim());
+    if (operation.target === "remote-linux-compose") return Boolean(values.sshPrivateKey?.trim() || values.sshPassword?.trim());
+    return false;
+  }
 
   useEffect(() => {
     if (!planResult || planResult.target.kind !== "local-compose" || !targetReport?.ready) return;
@@ -472,6 +513,8 @@ function App() {
       </section>
       {error && <section className="notice error" role="alert"><strong>Session unavailable</strong><p>{error}</p></section>}
       {status && <section className="notice success"><strong>Local control service is ready</strong><dl><div><dt>Version</dt><dd>{status.version}</dd></div><div><dt>API</dt><dd>{status.apiVersion}</dd></div><div><dt>Platform</dt><dd>{status.platform}</dd></div></dl><button type="button" className="secondary" onClick={exportDiagnostics}>Export redacted diagnostics</button></section>}
+      {recoveryMessage && <section className="notice"><strong>Lifecycle recovery</strong><p>{recoveryMessage}</p></section>}
+      {activeOperations.length > 0 && <section className="release-panel" aria-labelledby="recovery-heading"><p className="eyebrow">Interrupted lifecycle work</p><h2 id="recovery-heading">Recover active operations</h2><p>Ranch Hand found durable operation locks from an interrupted session. Pre-apply phases can be closed without touching the target. A phase where apply may have started reruns the adapter's ownership-checked recovery with fresh in-memory credentials.</p>{activeOperations.map((operation) => { const preApply = operation.phase === "prepared" || operation.phase === "backup-complete"; const fields = preApply || operation.target === "local-compose" ? [] : (credentialFields[operation.target] || []); const values = recoveryCredentials[operation.deploymentId] || {}; const credentialsReady = recoveryCredentialsReady(operation, values); return <div className="inline-result install-panel" key={operation.operationId}><strong>{operation.kind} — {operation.target}</strong><p>Phase: {operation.phase}. Release: {operation.fromVersion ? `${operation.fromVersion} → ` : ""}{operation.toVersion}. Last journal update: {new Date(operation.updatedAt).toLocaleString()}.</p>{fields.map((field) => <label key={field.key}>{field.label}{field.file ? <input type="file" accept=".pem,.key" onChange={async (event) => { const file = event.target.files?.[0]; if (file && file.size > 1024 * 1024) { setRecoveryMessage("SSH private key file exceeds the 1 MiB safety limit"); return; } const contents = file ? await file.text() : ""; setRecoveryCredentials((current) => ({ ...current, [operation.deploymentId]: { ...(current[operation.deploymentId] || {}), [field.key]: contents } })); }} /> : <input type="password" placeholder={field.placeholder} value={values[field.key] || ""} onChange={(event) => setRecoveryCredentials((current) => ({ ...current, [operation.deploymentId]: { ...(current[operation.deploymentId] || {}), [field.key]: event.target.value } }))} />}</label>)}<button type="button" disabled={recoveringDeployment !== "" || !credentialsReady} onClick={() => recoverActiveOperation(operation)}>{recoveringDeployment === operation.deploymentId ? "Recovering…" : preApply ? "Safely close pre-apply operation" : "Run ownership-checked recovery"}</button></div>; })}</section>}
       <section className="release-panel" aria-labelledby="release-heading">
         <p className="eyebrow">Immutable release</p>
         <h2 id="release-heading">Verify a RepoWrangler bundle</h2>

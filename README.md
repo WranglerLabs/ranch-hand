@@ -2,17 +2,21 @@
 
 Ranch Hand is the standalone, Windows-first lifecycle manager for [RepoWrangler](https://github.com/WranglerLabs/repo-wrangler). It is for operators who want to install and manage RepoWrangler without cloning or forking its source repository. Contributors and advanced operators can still use RepoWrangler's documented deployment recipes directly.
 
-> **Status:** unsigned [`v0.1.0-rc.1`](docs/releases/v0.1.0-rc.1.md) candidate. The secure local application shell, immutable release verification/cache, secret-free plan creation/export, artifact preflight, non-mutating dry run, and live target-native connectivity preflight are working. Ranch Hand can install evaluation instances on all four initial targets; local Docker also supports consistent backup and backup-first update, restore, rollback, repair, interrupted-operation recovery, and rollback-pool retention. This candidate is for evaluation and release validation; it is not an Authenticode-signed or generally available production release.
+> **Status: Public Preview.** [`v0.1.0-rc.1`](docs/releases/v0.1.0-rc.1.md)
+> is the primary recommended Windows deployment path for RepoWrangler. It is
+> publicly downloadable and functional, but it is unsigned and not production
+> supported or generally available. See the complete [GA readiness
+> gates](docs/ga-readiness.md).
 
 ## Start here
 
-- **Evaluate the current Windows candidate:** use the public
+- **Recommended — use the Public Preview:** use the public
   [Ranch Hand for Windows guide](https://wranglerlabs.org/ranch-hand) to download
-  the stable unsigned prerelease asset, verify it, launch it, and complete a
+  stable unsigned preview asset, verify it, launch it, and complete a
   supported evaluation deployment. A GitHub account is not required.
 - **Wait for the signed GA installer:** the first signed stable release remains
   gated on Authenticode signing and clean-Windows/real-target UAT.
-- **Deploy without Ranch Hand:** clone or fork
+- **Manual alternative:** clone or fork
   [RepoWrangler](https://github.com/WranglerLabs/repo-wrangler) and use its
   documented Docker, Cloudflare, Azure Container Apps, or Kubernetes recipes.
 
@@ -104,7 +108,7 @@ The interface can run a separate live connectivity preflight after the offline c
 | Local Docker Compose | Docker Engine API over the Windows named pipe or Unix socket | Engine health, API version, Linux-container mode, and loopback bundle contract |
 | Remote Linux Compose | Embedded Go SSH client | Pinned host identity, Linux Docker/Compose, unused project, and dedicated directory |
 
-These checks do not shell out to Azure CLI, Wrangler CLI, a local Docker CLI, or OpenSSH. Azure and Cloudflare bearer tokens and SSH key/password material are submitted only to the loopback API, are never added to the plan or response, and are cleared from the form after each attempt. The current Azure preflight accepts a temporary ARM access token; integrated interactive Azure authentication remains part of the adapter work before RC.
+These checks do not shell out to Azure CLI, Wrangler CLI, a local Docker CLI, or OpenSSH. Azure and Cloudflare bearer tokens and SSH key/password material are submitted only to the loopback API, are never added to the plan or response, and are cleared from the form after each attempt. The current Azure preflight accepts a temporary ARM access token; integrated interactive Azure authentication remains part of the adapter work before GA.
 
 ## Verified bundle staging
 

@@ -99,7 +99,7 @@ func New(token, version string, ui fs.FS) http.Handler {
 	}
 	if stageErr == nil && storeErr == nil {
 		coordinator, _ = operations.NewCoordinator(store, stager, operations.NewRegistry(map[string]operations.Mutator{
-			"local-compose": localDocker, "azure-container-apps": adapter.NewAzureContainerApps(),
+			"local-compose": localDocker, "local-wsl-compose": adapter.NewWSLCompose(), "azure-container-apps": adapter.NewAzureContainerApps(),
 			"cloudflare": adapter.NewCloudflare(), "remote-linux-compose": adapter.NewRemoteLinuxCompose(),
 		}))
 	}
@@ -127,6 +127,7 @@ func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, 
 	mux.Handle("POST /api/v1/plans/preflight", s.authorize(http.HandlerFunc(s.preflightPlan)))
 	mux.Handle("POST /api/v1/plans/dry-run", s.authorize(http.HandlerFunc(s.dryRunPlan)))
 	mux.Handle("POST /api/v1/targets/preflight", s.authorize(http.HandlerFunc(s.preflightTarget)))
+	mux.Handle("GET /api/v1/targets/wsl-distributions", s.authorize(http.HandlerFunc(s.wslDistributions)))
 	mux.Handle("POST /api/v1/bundles/stage", s.authorize(http.HandlerFunc(s.stageBundle)))
 	mux.Handle("POST /api/v1/operations/run", s.authorize(http.HandlerFunc(s.runOperation)))
 	mux.Handle("GET /api/v1/operations/active", s.authorize(http.HandlerFunc(s.listActiveOperations)))
@@ -140,6 +141,15 @@ func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, 
 	mux.Handle("GET /api/v1/releases/recommended", s.authorize(http.HandlerFunc(s.recommendedRelease)))
 	mux.Handle("/", s.spa())
 	return s.securityHeaders(mux)
+}
+
+func (s *Server) wslDistributions(w http.ResponseWriter, r *http.Request) {
+	distributions, err := adapter.WSLDistributions(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"distributions": distributions})
 }
 
 func (s *Server) recommendedRelease(w http.ResponseWriter, r *http.Request) {
@@ -354,10 +364,11 @@ func (s *Server) runOperation(w http.ResponseWriter, r *http.Request) {
 	}
 	defer request.Credentials.Clear()
 	localOperation := request.Plan.Target.Kind == "local-compose" && (request.Kind == lifecycle.Install || request.Kind == lifecycle.Backup || request.Kind == lifecycle.Update || request.Kind == lifecycle.Restore || request.Kind == lifecycle.Rollback || request.Kind == lifecycle.Repair)
+	wslOperation := request.Plan.Target.Kind == "local-wsl-compose" && request.Kind == lifecycle.Install
 	azureOperation := request.Plan.Target.Kind == "azure-container-apps" && request.Kind == lifecycle.Install
 	cloudflareOperation := request.Plan.Target.Kind == "cloudflare" && request.Kind == lifecycle.Install
 	remoteOperation := request.Plan.Target.Kind == "remote-linux-compose" && request.Kind == lifecycle.Install
-	if !localOperation && !azureOperation && !cloudflareOperation && !remoteOperation {
+	if !localOperation && !wslOperation && !azureOperation && !cloudflareOperation && !remoteOperation {
 		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "this target and lifecycle operation is not enabled in the current build"})
 		return
 	}

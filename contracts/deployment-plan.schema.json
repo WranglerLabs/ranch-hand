@@ -25,7 +25,7 @@
       "additionalProperties": false,
       "required": ["kind"],
       "properties": {
-        "kind": { "enum": ["azure-container-apps", "cloudflare", "local-compose", "remote-linux-compose"] }
+        "kind": { "enum": ["azure-container-apps", "cloudflare", "local-compose", "local-wsl-compose", "remote-linux-compose"] }
       }
     },
     "configuration": {
@@ -44,6 +44,10 @@
     {
       "if": { "properties": { "target": { "properties": { "kind": { "const": "local-compose" } } } } },
       "then": { "properties": { "configuration": { "$ref": "#/$defs/localCompose" } } }
+    },
+    {
+      "if": { "properties": { "target": { "properties": { "kind": { "const": "local-wsl-compose" } } } } },
+      "then": { "properties": { "configuration": { "$ref": "#/$defs/localWSLCompose" } } }
     },
     {
       "if": { "properties": { "target": { "properties": { "kind": { "const": "remote-linux-compose" } } } } },
@@ -77,6 +81,14 @@
         "projectName": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$" },
         "dataVolume": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$" },
         "listenAddress": { "type": "string", "pattern": "^127\\.0\\.0\\.1:[0-9]{4,5}$" }
+      }
+    },
+    "localWSLCompose": {
+      "type": "object", "additionalProperties": false,
+      "required": ["distribution", "projectName"],
+      "properties": {
+        "distribution": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
+        "projectName": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$" }
       }
     },
     "remoteLinuxCompose": {

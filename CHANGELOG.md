@@ -6,6 +6,21 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.3] - 2026-07-17
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- Split the misleading local target into **Local Docker Compose — WSL** and
+  **Local Docker Desktop**. The WSL target executes the verified Compose bundle
+  inside a detected WSL2 distribution without Docker Desktop or SSH; the
+  Docker Desktop target retains the Windows Docker Engine API lifecycle.
+- Removed the WSL volume and listen-address questions. Ranch Hand selects the
+  Docker-managed volume and Windows loopback address automatically and reports
+  a stopped WSL Docker service explicitly during preflight.
+
 ## [0.1.0-rc.2] - 2026-07-17
 
 **Classification: Public Preview.** Publicly downloadable and intended for

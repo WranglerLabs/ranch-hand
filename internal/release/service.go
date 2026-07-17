@@ -194,7 +194,7 @@ func (s *Service) Discover(ctx context.Context, channel, target string) (Discove
 		if decoder.Decode(&manifest) != nil || decoder.Decode(&struct{}{}) != io.EOF || manifest.Validate(candidate.TagName, s.validateURL) != nil {
 			continue
 		}
-		if _, err := manifest.Artifact(target); err != nil {
+		if _, err := manifest.Artifact(ArtifactTarget(target)); err != nil {
 			continue
 		}
 		return DiscoveredRelease{Version: candidate.TagName, ManifestURL: expected.String(), Prerelease: candidate.Prerelease}, nil
@@ -238,7 +238,7 @@ func (s *Service) VerifyAndCache(ctx context.Context, request Request) (Verified
 	if err := manifest.Validate(request.Version, s.validateURL); err != nil {
 		return VerifiedArtifact{}, fmt.Errorf("validate release manifest: %w", err)
 	}
-	artifact, err := manifest.Artifact(request.Target)
+	artifact, err := manifest.Artifact(ArtifactTarget(request.Target))
 	if err != nil {
 		return VerifiedArtifact{}, err
 	}
@@ -259,7 +259,7 @@ func (s *Service) VerifyAndCache(ctx context.Context, request Request) (Verified
 		return VerifiedArtifact{}, err
 	}
 	return VerifiedArtifact{
-		Product: Product, Version: request.Version, Target: artifact.Target, URL: artifact.URL,
+		Product: Product, Version: request.Version, Target: request.Target, URL: artifact.URL,
 		SHA256: strings.ToLower(artifact.SHA256), Size: artifact.Size, MediaType: artifact.MediaType,
 		AttestationURL: artifact.AttestationURL, SBOMURL: artifact.SBOMURL,
 		CachePath: cachePath, CacheHit: cacheHit, ProvenancePath: provenancePath, SBOMPath: sbomPath,

@@ -90,9 +90,14 @@ func DryRun(candidate DeploymentPlan) (DryRunReport, error) {
 			"Request the API token at apply time, deploy immutable assets, migrate D1, and verify native HTTPS health.",
 		},
 		"local-compose": {
-			"Connect to the local Docker Engine API and inspect Compose project, network, volume, and port state.",
+			"Connect to Docker Desktop's Windows-exposed Docker Engine API and inspect container, volume, and port state.",
 			"Stage the verified Compose bundle and resolve its immutable image digest without source checkout.",
 			"Request runtime secrets at apply time, create the project, and verify loopback or operator-provided HTTPS ingress.",
+		},
+		"local-wsl-compose": {
+			"Start the selected WSL distribution and verify its Linux Docker Engine and Docker Compose v2.",
+			"Transfer the verified Compose bundle into the distribution's user data directory with ownership markers.",
+			"Run Docker Compose inside WSL, bind RepoWrangler to Windows loopback port 8080, and verify the exact release.",
 		},
 		"remote-linux-compose": {
 			"Verify the pinned SSH host identity, Linux Docker Engine, Docker Compose v2, unused project, and dedicated installation directory.",

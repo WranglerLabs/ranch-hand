@@ -196,7 +196,7 @@ func validateVerifiedArtifact(verified productrelease.VerifiedArtifact) error {
 }
 
 func targetFamily(target string) string {
-	if target == "local-compose" || target == "remote-linux-compose" {
+	if target == "local-compose" || target == "local-wsl-compose" || target == "remote-linux-compose" {
 		return "compose"
 	}
 	return target

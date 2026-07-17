@@ -2,7 +2,7 @@
 
 Ranch Hand is the standalone, Windows-first lifecycle manager for [RepoWrangler](https://github.com/WranglerLabs/repo-wrangler). It is for operators who want to install and manage RepoWrangler without cloning or forking its source repository. Contributors and advanced operators can still use RepoWrangler's documented deployment recipes directly.
 
-> **Status:** unsigned `v0.1.0-rc.1` candidate. The secure local application shell, immutable release verification/cache, secret-free plan creation/export, artifact preflight, non-mutating dry run, and live target-native connectivity preflight are working. Ranch Hand can install evaluation instances on all four initial targets; local Docker also supports consistent backup and backup-first update, restore, rollback, repair, interrupted-operation recovery, and rollback-pool retention. This candidate is for evaluation and release validation; it is not an Authenticode-signed or generally available production release.
+> **Status:** unsigned [`v0.1.0-rc.1`](docs/releases/v0.1.0-rc.1.md) candidate. The secure local application shell, immutable release verification/cache, secret-free plan creation/export, artifact preflight, non-mutating dry run, and live target-native connectivity preflight are working. Ranch Hand can install evaluation instances on all four initial targets; local Docker also supports consistent backup and backup-first update, restore, rollback, repair, interrupted-operation recovery, and rollback-pool retention. This candidate is for evaluation and release validation; it is not an Authenticode-signed or generally available production release.
 
 ## First release scope
 

@@ -52,7 +52,7 @@ func TestRejectsFloatingRelease(t *testing.T) {
 func TestCreateBindsPlanToVerifiedRelease(t *testing.T) {
 	candidate, err := Create(CreateRequest{
 		Name: "Cloud Wrangler", Version: "v1.2.3", Target: "cloudflare",
-		Configuration: map[string]string{"accountId": "account", "workerName": "wrangler", "databaseName": "wrangler-db"},
+		Configuration: map[string]string{"accountId": "0123456789abcdef0123456789abcdef", "workerName": "wrangler", "databaseName": "wrangler-db"},
 	}, VerifiedRelease{
 		ManifestURL:    "https://github.com/WranglerLabs/repo-wrangler/releases/download/v1.2.3/release-manifest.json",
 		ManifestSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -72,6 +72,18 @@ func TestCreateBindsPlanToVerifiedRelease(t *testing.T) {
 	second, err := CanonicalJSON(candidate)
 	if err != nil || string(first) != string(second) {
 		t.Fatal("canonical deployment plan is not deterministic")
+	}
+}
+
+func TestRejectsUnsafeCloudflareIdentifiers(t *testing.T) {
+	var candidate DeploymentPlan
+	if err := json.Unmarshal([]byte(validPlan), &candidate); err != nil {
+		t.Fatal(err)
+	}
+	candidate.Target.Kind = "cloudflare"
+	candidate.Configuration = map[string]string{"accountId": "account", "workerName": "Invalid_Worker", "databaseName": "database"}
+	if err := candidate.Validate(); err == nil {
+		t.Fatal("unsafe Cloudflare account and Worker identifiers were accepted")
 	}
 }
 

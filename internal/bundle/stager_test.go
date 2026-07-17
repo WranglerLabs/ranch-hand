@@ -182,7 +182,7 @@ func TestStagesManagedPlatformBundles(t *testing.T) {
 		},
 		{
 			name: "cloudflare", target: "cloudflare", root: "cloudflare",
-			identity: `{"schemaVersion":"1.0","product":"RepoWrangler","version":"v1.2.3","targetFamily":"cloudflare","worker":"worker.js","assetsDirectory":"assets","migrationsDirectory":"migrations","compatibilityDate":"2026-07-01","publicHttps":"cloudflare-managed"}`,
+			identity: `{"schemaVersion":"1.0","product":"RepoWrangler","version":"v1.2.3","targetFamily":"cloudflare","worker":"worker.js","assetsDirectory":"assets","migrationsDirectory":"migrations","compatibilityDate":"2026-07-01","publicHttps":"cloudflare-managed","assetsBinding":"ASSETS","d1Binding":"DB","assetsNotFoundHandling":"single-page-application","assetsRunWorkerFirst":["/api/*","/auth/*","/webhooks/*","/health/*","/setup/*"],"crons":["*/5 * * * *","17 3 * * *"],"vars":{"ALLOWED_GITHUB_USERS":"","APP_VERSION":"v1.2.3","AUTH_MODE":"github_app","DEMO_MODE":"true"},"observabilityEnabled":true}`,
 			payload:  archiveEntry{name: "cloudflare/worker.js", contents: "export default {}"},
 		},
 	}

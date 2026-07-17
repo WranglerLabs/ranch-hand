@@ -127,10 +127,11 @@ function App() {
   const [installConfirmed, setInstallConfirmed] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [operationResult, setOperationResult] = useState<OperationResult | null>(null);
-  const [operationKind, setOperationKind] = useState<"install" | "backup" | "update" | "azure-install" | null>(null);
+  const [operationKind, setOperationKind] = useState<"install" | "backup" | "update" | "azure-install" | "cloudflare-install" | null>(null);
   const [localAction, setLocalAction] = useState<"install" | "update">("install");
   const [fromVersion, setFromVersion] = useState("");
   const [operationAzureToken, setOperationAzureToken] = useState("");
+  const [operationCloudflareToken, setOperationCloudflareToken] = useState("");
 
   useEffect(() => {
     if (!token) {
@@ -154,6 +155,7 @@ function App() {
     setOperationResult(null);
     setOperationKind(null);
     setOperationAzureToken("");
+    setOperationCloudflareToken("");
     try {
       const result = await api<{ verified: true; artifact: VerifiedArtifact }>("/api/v1/releases/verify", {
         method: "POST",
@@ -179,6 +181,7 @@ function App() {
     setOperationResult(null);
     setOperationKind(null);
     setOperationAzureToken("");
+    setOperationCloudflareToken("");
     try {
       const cleaned = Object.fromEntries(Object.entries(configuration).filter(([, value]) => value.trim() !== ""));
       const result = await api<{ plan: DeploymentPlan }>("/api/v1/plans/create", {
@@ -319,6 +322,25 @@ function App() {
     }
   }
 
+  async function installCloudflare() {
+    if (!planResult || !installConfirmed || !operationCloudflareToken) return;
+    setInstalling(true);
+    setPlanError("");
+    setOperationResult(null);
+    try {
+      setOperationResult(await api<OperationResult>("/api/v1/operations/run", {
+        method: "POST",
+        body: JSON.stringify({ kind: "install", plan: planResult, credentials: { cloudflareApiToken: operationCloudflareToken } }),
+      }));
+      setOperationKind("cloudflare-install");
+    } catch (reason) {
+      setPlanError(reason instanceof Error ? reason.message : "Cloudflare evaluation installation failed");
+    } finally {
+      setOperationCloudflareToken("");
+      setInstalling(false);
+    }
+  }
+
   return (
     <main>
       <header>
@@ -338,7 +360,7 @@ function App() {
         <p>Choose an explicit release and deployment target. Ranch Hand downloads only the published bundle, verifies its declared size and SHA-256, and stores the verified bytes in its local versioned cache.</p>
         <form onSubmit={verifyRelease}>
           <label>Release version<input required pattern="v[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9.-]+)?" placeholder="v1.0.8" value={version} onChange={(event) => setVersion(event.target.value)} /></label>
-          <label>Deployment target<select value={target} onChange={(event) => { setTarget(event.target.value); setArtifact(null); setPlanResult(null); setConfiguration({}); setRuntimeCredentials({}); setTargetReport(null); setStagedBundle(null); setInstallConfirmed(false); setOperationResult(null); setOperationKind(null); setOperationAzureToken(""); }}><option value="azure-container-apps">Azure Container Apps</option><option value="cloudflare">Cloudflare</option><option value="local-compose">Local Docker Compose</option><option value="remote-linux-compose">Remote Linux Compose</option></select></label>
+          <label>Deployment target<select value={target} onChange={(event) => { setTarget(event.target.value); setArtifact(null); setPlanResult(null); setConfiguration({}); setRuntimeCredentials({}); setTargetReport(null); setStagedBundle(null); setInstallConfirmed(false); setOperationResult(null); setOperationKind(null); setOperationAzureToken(""); setOperationCloudflareToken(""); }}><option value="azure-container-apps">Azure Container Apps</option><option value="cloudflare">Cloudflare</option><option value="local-compose">Local Docker Compose</option><option value="remote-linux-compose">Remote Linux Compose</option></select></label>
           <button type="submit" disabled={verifying || !token}>{verifying ? "Verifying and caching…" : "Verify and cache release"}</button>
         </form>
         {releaseError && <div className="inline-result error" role="alert"><strong>Release rejected</strong><p>{releaseError}</p></div>}
@@ -366,10 +388,12 @@ function App() {
         {targetReport && <div className={`inline-result ${targetReport.ready ? "success" : "error"}`}><strong>{targetReport.ready ? "Target is ready" : "Target preflight blocked"}</strong><ul>{targetReport.checks.map((check) => <li key={check.name}>{check.ok ? "✓" : "✕"} {check.message}</li>)}</ul></div>}
         {target === "local-compose" && targetReport?.ready && stagedBundle && !operationResult && <div className="inline-result install-panel"><strong>Apply local evaluation plan</strong><label>Operation<select value={localAction} onChange={(event) => { setLocalAction(event.target.value as "install" | "update"); setInstallConfirmed(false); }}><option value="install">New installation</option><option value="update">Backup-first update</option></select></label>{localAction === "install" ? <><p>This installs RepoWrangler in demo mode with SQLite, binds only to 127.0.0.1, and creates no proxy or public ingress.</p><label className="confirmation"><input type="checkbox" checked={installConfirmed} onChange={(event) => setInstallConfirmed(event.target.checked)} /> I understand this is a local evaluation install.</label><button type="button" disabled={!installConfirmed || installing} onClick={installLocal}>{installing ? "Installing and verifying…" : "Install local evaluation"}</button></> : <><p>Ranch Hand will verify and back up the current owned container, seed a new volume, preserve the old container and volume for rollback, activate the immutable release selected above, and recover automatically if readiness fails.</p><label>Currently installed immutable version<input required pattern="v[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9.-]+)?" placeholder="v1.0.8" value={fromVersion} onChange={(event) => setFromVersion(event.target.value)} /></label><label className="confirmation"><input type="checkbox" checked={installConfirmed} onChange={(event) => setInstallConfirmed(event.target.checked)} /> I understand the running local instance will have brief downtime during backup and activation.</label><button type="button" disabled={!installConfirmed || !fromVersion || fromVersion === planResult?.release.version || installing} onClick={updateLocal}>{installing ? "Backing up and updating…" : "Back up and update local evaluation"}</button></>}</div>}
         {target === "azure-container-apps" && targetReport?.ready && stagedBundle && !operationResult && <div className="inline-result install-panel"><strong>Install Azure evaluation instance</strong><p>Ranch Hand will create the new dedicated resource group, deploy the verified compiled ARM template in demo/SQLite mode, and expose only Azure Container Apps managed HTTPS. Existing resource groups, custom domains, production credentials, and Azure updates are not enabled in this adapter.</p><label>Fresh Azure ARM access token<input type="password" required placeholder="Held in memory only and cleared after use" value={operationAzureToken} onChange={(event) => setOperationAzureToken(event.target.value)} /></label><label className="confirmation"><input type="checkbox" checked={installConfirmed} onChange={(event) => setInstallConfirmed(event.target.checked)} /> I understand this creates billable Azure resources in a dedicated evaluation resource group.</label><button type="button" disabled={!installConfirmed || !operationAzureToken || installing} onClick={installAzure}>{installing ? "Deploying and verifying Azure…" : "Install Azure evaluation"}</button></div>}
+        {target === "cloudflare" && targetReport?.ready && stagedBundle && !operationResult && <div className="inline-result install-panel"><strong>Install Cloudflare evaluation instance</strong><p>Ranch Hand will create a new dedicated D1 database, apply the verified migrations, upload the immutable Worker and web assets through Cloudflare's native API, configure the published schedules, and expose only Cloudflare-managed workers.dev HTTPS. Existing resources, custom domains, production secrets, and Cloudflare updates are not enabled in this adapter.</p><label>Fresh scoped Cloudflare API token<input type="password" required placeholder="Held in memory only and cleared after use" value={operationCloudflareToken} onChange={(event) => setOperationCloudflareToken(event.target.value)} /></label><label className="confirmation"><input type="checkbox" checked={installConfirmed} onChange={(event) => setInstallConfirmed(event.target.checked)} /> I understand this creates Cloudflare Worker and D1 resources in evaluation mode.</label><button type="button" disabled={!installConfirmed || !operationCloudflareToken || installing} onClick={installCloudflare}>{installing ? "Deploying and verifying Cloudflare…" : "Install Cloudflare evaluation"}</button></div>}
         {operationResult && operationKind === "install" && <div className="inline-result success"><strong>Local RepoWrangler installation committed</strong><p>The container passed its readiness check and the lifecycle journal is {operationResult.operation.journal.phase}. Open <a href={`http://${planResult?.configuration.listenAddress}`} target="_blank" rel="noreferrer">http://{planResult?.configuration.listenAddress}</a>.</p><button type="button" className="secondary" disabled={installing} onClick={backupLocal}>{installing ? "Creating consistent backup…" : "Back up local data"}</button></div>}
         {operationResult && operationKind === "backup" && <div className="inline-result success"><strong>Consistent local backup committed</strong><p>Ranch Hand archived the managed container's persistent data while preserving its original running or stopped state. A running container was restarted and readiness-verified. The lifecycle journal is {operationResult.operation.journal.phase}.</p>{operationResult.operation.backup && <dl><div><dt>Archive</dt><dd>{operationResult.operation.backup.artifact.locator}</dd></div><div><dt>Size</dt><dd>{operationResult.operation.backup.artifact.size.toLocaleString()} bytes</dd></div><div><dt>SHA-256</dt><dd className="digest">{operationResult.operation.backup.artifact.sha256}</dd></div></dl>}</div>}
         {operationResult && operationKind === "update" && <div className="inline-result success"><strong>Backup-first local update committed</strong><p>The new immutable container passed readiness verification. The prior container and volume remain stopped in the rollback pool, and the lifecycle journal is {operationResult.operation.journal.phase}.</p>{operationResult.operation.backup && <dl><div><dt>Rollback archive</dt><dd>{operationResult.operation.backup.artifact.locator}</dd></div><div><dt>Size</dt><dd>{operationResult.operation.backup.artifact.size.toLocaleString()} bytes</dd></div><div><dt>SHA-256</dt><dd className="digest">{operationResult.operation.backup.artifact.sha256}</dd></div></dl>}<button type="button" className="secondary" disabled={installing} onClick={backupLocal}>{installing ? "Creating consistent backup…" : "Back up updated local data"}</button></div>}
         {operationResult && operationKind === "azure-install" && <div className="inline-result success"><strong>Azure evaluation installation committed</strong><p>The ARM deployment, digest-pinned image, Azure-managed HTTPS endpoint, readiness, and exact immutable release identity passed verification. The lifecycle journal is {operationResult.operation.journal.phase}.</p></div>}
+        {operationResult && operationKind === "cloudflare-install" && <div className="inline-result success"><strong>Cloudflare evaluation installation committed</strong><p>The D1 ownership marker and migrations, Worker module and assets, schedules, Cloudflare-managed HTTPS endpoint, readiness, and exact immutable release identity passed verification. The lifecycle journal is {operationResult.operation.journal.phase}.</p></div>}
       </section>}
       <section className="grid" aria-label="Initial deployment targets">
         {[
@@ -377,7 +401,7 @@ function App() {
           ["Local Docker Compose", "A workstation, mini-PC, home server, or lab host."],
           ["Remote Linux Compose", "A Linux VM or server managed securely over SSH."],
           ["Cloudflare", "The reference Worker, D1, and static web profile."],
-        ].map(([name, detail]) => <article key={name}><h3>{name}</h3><p>{detail}</p><span>Adapter planned</span></article>)}
+        ].map(([name, detail]) => <article key={name}><h3>{name}</h3><p>{detail}</p><span>{name === "Remote Linux Compose" ? "Adapter planned" : "Evaluation install available"}</span></article>)}
       </section>
       <footer>Ranch Hand runs on loopback only. Deployment credentials are never stored in deployment plans.</footer>
     </main>

@@ -51,6 +51,9 @@ var (
 	azureResourceGroupPattern = regexp.MustCompile(`^[A-Za-z0-9._()-]{1,90}$`)
 	azureLocationPattern      = regexp.MustCompile(`^[a-z0-9]{2,32}$`)
 	containerAppNamePattern   = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}[a-z0-9]$`)
+	cloudflareAccountPattern  = regexp.MustCompile(`^[a-fA-F0-9]{32}$`)
+	cloudflareWorkerPattern   = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+	cloudflareDatabasePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 )
 
 var configurationFields = map[string]map[string]bool{
@@ -215,6 +218,17 @@ func (p DeploymentPlan) Validate() error {
 		}
 		if !containerAppNamePattern.MatchString(p.Configuration["environmentName"]) || !containerAppNamePattern.MatchString(p.Configuration["appName"]) {
 			return errors.New("Azure Container Apps names must use 3-32 lowercase letters, numbers, or hyphens")
+		}
+	}
+	if p.Target.Kind == "cloudflare" {
+		if !cloudflareAccountPattern.MatchString(p.Configuration["accountId"]) {
+			return errors.New("cloudflare accountId must contain 32 hexadecimal characters")
+		}
+		if !cloudflareWorkerPattern.MatchString(p.Configuration["workerName"]) {
+			return errors.New("cloudflare workerName must be a DNS-safe lowercase Worker name")
+		}
+		if !cloudflareDatabasePattern.MatchString(p.Configuration["databaseName"]) {
+			return errors.New("cloudflare databaseName must use lowercase letters, numbers, underscore, or hyphen")
 		}
 	}
 	return nil

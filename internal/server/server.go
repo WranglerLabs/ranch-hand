@@ -72,6 +72,7 @@ func New(token, version string, ui fs.FS) http.Handler {
 		localDocker := adapter.NewLocalDocker()
 		coordinator, _ = operations.NewCoordinator(store, stager, operations.NewRegistry(map[string]operations.Mutator{
 			"local-compose": localDocker, "azure-container-apps": adapter.NewAzureContainerApps(),
+			"cloudflare": adapter.NewCloudflare(),
 		}))
 	}
 	return newWithServices(token, version, ui, verifier, targets, stager, coordinator)
@@ -128,7 +129,8 @@ func (s *Server) runOperation(w http.ResponseWriter, r *http.Request) {
 	defer request.Credentials.Clear()
 	localOperation := request.Plan.Target.Kind == "local-compose" && (request.Kind == lifecycle.Install || request.Kind == lifecycle.Backup || request.Kind == lifecycle.Update)
 	azureOperation := request.Plan.Target.Kind == "azure-container-apps" && request.Kind == lifecycle.Install
-	if !localOperation && !azureOperation {
+	cloudflareOperation := request.Plan.Target.Kind == "cloudflare" && request.Kind == lifecycle.Install
+	if !localOperation && !azureOperation && !cloudflareOperation {
 		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "this target and lifecycle operation is not enabled in the current build"})
 		return
 	}

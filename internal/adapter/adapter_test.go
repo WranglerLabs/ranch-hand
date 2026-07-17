@@ -56,6 +56,7 @@ func TestAzureContainerAppsUsesARMAndRequiresRegisteredProvider(t *testing.T) {
 }
 
 func TestCloudflareVerifiesTokenAndAccount(t *testing.T) {
+	accountID := "0123456789abcdef0123456789abcdef"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer cf-token" {
 			t.Fatal("missing Cloudflare bearer token")
@@ -65,11 +66,23 @@ func TestCloudflareVerifiesTokenAndAccount(t *testing.T) {
 			_, _ = io.WriteString(w, `{"success":true,"result":{"status":"active"}}`)
 			return
 		}
-		_, _ = io.WriteString(w, `{"success":true,"result":{"id":"account"}}`)
+		if strings.HasSuffix(r.URL.Path, "/workers/subdomain") {
+			_, _ = io.WriteString(w, `{"success":true,"result":{"subdomain":"wranglerlabs"}}`)
+			return
+		}
+		if strings.Contains(r.URL.Path, "/workers/scripts/") {
+			http.Error(w, "missing", http.StatusNotFound)
+			return
+		}
+		if strings.Contains(r.URL.Path, "/d1/database") {
+			_, _ = io.WriteString(w, `{"success":true,"result":[]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"success":true,"result":{"id":"`+accountID+`"}}`)
 	}))
 	defer server.Close()
 	adapter := newCloudflare(server.Client(), server.URL)
-	report := adapter.Preflight(context.Background(), targetPlan("cloudflare", map[string]string{"accountId": "account"}), Credentials{CloudflareAPIToken: "cf-token"})
+	report := adapter.Preflight(context.Background(), targetPlan("cloudflare", map[string]string{"accountId": accountID, "workerName": "repo-wrangler", "databaseName": "repo-wrangler"}), Credentials{CloudflareAPIToken: "cf-token"})
 	if !report.Ready {
 		t.Fatalf("unexpected Cloudflare preflight: %+v", report)
 	}
@@ -81,7 +94,7 @@ func TestControlPlaneFailureDoesNotExposeBearerToken(t *testing.T) {
 	}))
 	defer server.Close()
 	const secret = "do-not-return-this-token"
-	report := newCloudflare(server.Client(), server.URL).Preflight(context.Background(), targetPlan("cloudflare", map[string]string{"accountId": "account"}), Credentials{CloudflareAPIToken: secret})
+	report := newCloudflare(server.Client(), server.URL).Preflight(context.Background(), targetPlan("cloudflare", map[string]string{"accountId": "0123456789abcdef0123456789abcdef", "workerName": "repo-wrangler", "databaseName": "repo-wrangler"}), Credentials{CloudflareAPIToken: secret})
 	encoded, err := json.Marshal(report)
 	if err != nil {
 		t.Fatal(err)

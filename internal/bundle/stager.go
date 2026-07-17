@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	productrelease "github.com/WranglerLabs/ranch-hand/internal/release"
 )
@@ -53,19 +54,26 @@ type stageManifest struct {
 }
 
 type Identity struct {
-	SchemaVersion          string `json:"schemaVersion"`
-	Product                string `json:"product"`
-	Version                string `json:"version"`
-	TargetFamily           string `json:"targetFamily"`
-	Image                  string `json:"image,omitempty"`
-	PostgresImage          string `json:"postgresImage,omitempty"`
-	PublicHTTPS            string `json:"publicHttps"`
-	DefaultBindAddress     string `json:"defaultBindAddress,omitempty"`
-	RegistryAuthentication string `json:"registryAuthentication,omitempty"`
-	Worker                 string `json:"worker,omitempty"`
-	AssetsDirectory        string `json:"assetsDirectory,omitempty"`
-	MigrationsDirectory    string `json:"migrationsDirectory,omitempty"`
-	CompatibilityDate      string `json:"compatibilityDate,omitempty"`
+	SchemaVersion          string            `json:"schemaVersion"`
+	Product                string            `json:"product"`
+	Version                string            `json:"version"`
+	TargetFamily           string            `json:"targetFamily"`
+	Image                  string            `json:"image,omitempty"`
+	PostgresImage          string            `json:"postgresImage,omitempty"`
+	PublicHTTPS            string            `json:"publicHttps"`
+	DefaultBindAddress     string            `json:"defaultBindAddress,omitempty"`
+	RegistryAuthentication string            `json:"registryAuthentication,omitempty"`
+	Worker                 string            `json:"worker,omitempty"`
+	AssetsDirectory        string            `json:"assetsDirectory,omitempty"`
+	MigrationsDirectory    string            `json:"migrationsDirectory,omitempty"`
+	CompatibilityDate      string            `json:"compatibilityDate,omitempty"`
+	AssetsBinding          string            `json:"assetsBinding,omitempty"`
+	D1Binding              string            `json:"d1Binding,omitempty"`
+	AssetsNotFoundHandling string            `json:"assetsNotFoundHandling,omitempty"`
+	AssetsRunWorkerFirst   []string          `json:"assetsRunWorkerFirst,omitempty"`
+	Crons                  []string          `json:"crons,omitempty"`
+	Vars                   map[string]string `json:"vars,omitempty"`
+	ObservabilityEnabled   bool              `json:"observabilityEnabled,omitempty"`
 }
 
 type Stager struct {
@@ -361,6 +369,14 @@ func validateIdentity(identity Identity, root, version, family string) error {
 		if identity.PublicHTTPS != "cloudflare-managed" || identity.Worker != "worker.js" || identity.AssetsDirectory != "assets" || identity.MigrationsDirectory != "migrations" {
 			return errors.New("Cloudflare bundle security contract is invalid")
 		}
+		if _, err := time.Parse("2006-01-02", identity.CompatibilityDate); err != nil || identity.AssetsBinding != "ASSETS" || identity.D1Binding != "DB" || identity.AssetsNotFoundHandling != "single-page-application" || !identity.ObservabilityEnabled {
+			return errors.New("Cloudflare runtime contract is invalid")
+		}
+		expectedRoutes := []string{"/api/*", "/auth/*", "/webhooks/*", "/health/*", "/setup/*"}
+		expectedCrons := []string{"*/5 * * * *", "17 3 * * *"}
+		if !equalStrings(identity.AssetsRunWorkerFirst, expectedRoutes) || !equalStrings(identity.Crons, expectedCrons) || !evaluationVars(identity.Vars, identity.Version) {
+			return errors.New("Cloudflare evaluation configuration is invalid")
+		}
 		if !regularFile(filepath.Join(root, identity.Worker)) || !directory(filepath.Join(root, identity.AssetsDirectory)) || !directory(filepath.Join(root, identity.MigrationsDirectory)) {
 			return errors.New("Cloudflare bundle is missing Worker, assets, or migrations")
 		}
@@ -368,6 +384,25 @@ func validateIdentity(identity Identity, root, version, family string) error {
 		return errors.New("unsupported bundle target family")
 	}
 	return nil
+}
+
+func equalStrings(actual, expected []string) bool {
+	if len(actual) != len(expected) {
+		return false
+	}
+	for index := range expected {
+		if actual[index] != expected[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func evaluationVars(actual map[string]string, version string) bool {
+	if len(actual) != 4 {
+		return false
+	}
+	return actual["ALLOWED_GITHUB_USERS"] == "" && actual["APP_VERSION"] == version && actual["AUTH_MODE"] == "github_app" && actual["DEMO_MODE"] == "true"
 }
 
 func regularFile(filename string) bool {

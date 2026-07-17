@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,6 +14,18 @@ import (
 	"strings"
 	"testing"
 )
+
+var testSBOM = []byte(`{"spdxVersion":"SPDX-2.3","dataLicense":"CC0-1.0","SPDXID":"SPDXRef-DOCUMENT","name":"RepoWrangler","packages":[{"SPDXID":"SPDXRef-Package","name":"repo-wrangler"}]}`)
+
+type fakeProvenanceVerifier struct {
+	digests []string
+	err     error
+}
+
+func (f *fakeProvenanceVerifier) Verify(_ []byte, digest string) error {
+	f.digests = append(f.digests, digest)
+	return f.err
+}
 
 func digest(data []byte) string {
 	value := sha256.Sum256(data)
@@ -33,12 +46,17 @@ func releaseServer(t *testing.T, artifact []byte, artifactDigest string) (*httpt
 				Artifacts: []Artifact{{
 					Target: "local-compose", URL: server.URL + "/v1.2.3/bundle.tar.gz",
 					SHA256: artifactDigest, Size: int64(len(artifact)), MediaType: "application/gzip",
-					SBOMURL: server.URL + "/v1.2.3/bundle.spdx.json",
+					SBOMURL:        server.URL + "/v1.2.3/bundle.spdx.json",
+					AttestationURL: server.URL + "/v1.2.3/bundle.provenance.sigstore.json",
 				}},
 			}
 			_ = json.NewEncoder(response).Encode(manifest)
 		case "/v1.2.3/bundle.tar.gz":
 			_, _ = response.Write(artifact)
+		case "/v1.2.3/bundle.spdx.json":
+			_, _ = response.Write(testSBOM)
+		case "/v1.2.3/bundle.provenance.sigstore.json":
+			_, _ = response.Write([]byte(`{"verified-by":"fake test verifier"}`))
 		default:
 			http.NotFound(response, request)
 		}
@@ -52,6 +70,7 @@ func releaseServer(t *testing.T, artifact []byte, artifactDigest string) (*httpt
 	if err != nil {
 		t.Fatal(err)
 	}
+	service.provenance = &fakeProvenanceVerifier{}
 	request := Request{ManifestURL: server.URL + "/v1.2.3/release-manifest.json", Version: "v1.2.3", Target: "local-compose"}
 	return server, service, request
 }
@@ -67,6 +86,12 @@ func TestVerifyAndCacheArtifact(t *testing.T) {
 	if verified.CacheHit {
 		t.Fatal("first download unexpectedly reported a cache hit")
 	}
+	if !verified.ProvenanceVerified || !verified.SBOMVerified {
+		t.Fatal("supply-chain evidence was not classified as verified")
+	}
+	if len(service.provenance.(*fakeProvenanceVerifier).digests) != 2 {
+		t.Fatal("artifact and SBOM provenance were not both verified")
+	}
 	cached, err := os.ReadFile(verified.CachePath)
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +106,21 @@ func TestVerifyAndCacheArtifact(t *testing.T) {
 	}
 	if !second.CacheHit || second.CachePath != verified.CachePath {
 		t.Fatal("second verification did not reuse the verified cache entry")
+	}
+}
+
+func TestRejectsUnverifiedProvenance(t *testing.T) {
+	contents := []byte("bundle")
+	_, service, request := releaseServer(t, contents, digest(contents))
+	service.provenance = &fakeProvenanceVerifier{err: errors.New("invalid signature")}
+	if _, err := service.VerifyAndCache(context.Background(), request); err == nil || !strings.Contains(err.Error(), "artifact provenance") {
+		t.Fatalf("expected provenance rejection, got %v", err)
+	}
+}
+
+func TestRejectsIncompleteSPDX(t *testing.T) {
+	if err := validateSPDX([]byte(`{"spdxVersion":"SPDX-2.3","name":"not enough"}`)); err == nil {
+		t.Fatal("incomplete SPDX document was accepted")
 	}
 }
 

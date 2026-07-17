@@ -20,8 +20,10 @@ import (
 )
 
 const (
-	maxManifestSize = 1 << 20
-	maxArtifactSize = int64(4 << 30)
+	maxManifestSize   = 1 << 20
+	maxArtifactSize   = int64(4 << 30)
+	maxProvenanceSize = 8 << 20
+	maxSBOMSize       = 64 << 20
 )
 
 var defaultTrustedHosts = []string{
@@ -43,17 +45,21 @@ type Request struct {
 }
 
 type VerifiedArtifact struct {
-	Product        string `json:"product"`
-	Version        string `json:"version"`
-	Target         string `json:"target"`
-	URL            string `json:"url"`
-	SHA256         string `json:"sha256"`
-	Size           int64  `json:"size"`
-	MediaType      string `json:"mediaType,omitempty"`
-	AttestationURL string `json:"attestationUrl,omitempty"`
-	SBOMURL        string `json:"sbomUrl,omitempty"`
-	CachePath      string `json:"cachePath"`
-	CacheHit       bool   `json:"cacheHit"`
+	Product            string `json:"product"`
+	Version            string `json:"version"`
+	Target             string `json:"target"`
+	URL                string `json:"url"`
+	SHA256             string `json:"sha256"`
+	Size               int64  `json:"size"`
+	MediaType          string `json:"mediaType,omitempty"`
+	AttestationURL     string `json:"attestationUrl,omitempty"`
+	SBOMURL            string `json:"sbomUrl,omitempty"`
+	CachePath          string `json:"cachePath"`
+	CacheHit           bool   `json:"cacheHit"`
+	ProvenancePath     string `json:"provenancePath"`
+	SBOMPath           string `json:"sbomPath"`
+	ProvenanceVerified bool   `json:"provenanceVerified"`
+	SBOMVerified       bool   `json:"sbomVerified"`
 }
 
 type Service struct {
@@ -61,6 +67,7 @@ type Service struct {
 	cacheRoot    string
 	trustedHosts map[string]bool
 	releaseBase  *url.URL
+	provenance   ProvenanceVerifier
 }
 
 func NewService(cacheRoot string) (*Service, error) {
@@ -91,6 +98,10 @@ func NewServiceWithClient(cacheRoot string, client *http.Client, trustedHosts []
 	}
 	releaseBase.RawQuery = ""
 	releaseBase.Fragment = ""
+	provenance, err := NewSigstoreProvenanceVerifier(cacheRoot)
+	if err != nil {
+		return nil, err
+	}
 
 	copyClient := *client
 	previousRedirect := client.CheckRedirect
@@ -106,7 +117,7 @@ func NewServiceWithClient(cacheRoot string, client *http.Client, trustedHosts []
 		}
 		return nil
 	}
-	return &Service{client: &copyClient, cacheRoot: cacheRoot, trustedHosts: hosts, releaseBase: releaseBase}, nil
+	return &Service{client: &copyClient, cacheRoot: cacheRoot, trustedHosts: hosts, releaseBase: releaseBase, provenance: provenance}, nil
 }
 
 func (s *Service) VerifyAndCache(ctx context.Context, request Request) (VerifiedArtifact, error) {
@@ -161,12 +172,80 @@ func (s *Service) VerifyAndCache(ctx context.Context, request Request) (Verified
 	if err != nil {
 		return VerifiedArtifact{}, err
 	}
+	provenancePath, sbomPath, err := s.verifySupplyChain(ctx, request.Version, artifact, cachePath)
+	if err != nil {
+		return VerifiedArtifact{}, err
+	}
 	return VerifiedArtifact{
 		Product: Product, Version: request.Version, Target: artifact.Target, URL: artifact.URL,
 		SHA256: strings.ToLower(artifact.SHA256), Size: artifact.Size, MediaType: artifact.MediaType,
 		AttestationURL: artifact.AttestationURL, SBOMURL: artifact.SBOMURL,
-		CachePath: cachePath, CacheHit: cacheHit,
+		CachePath: cachePath, CacheHit: cacheHit, ProvenancePath: provenancePath, SBOMPath: sbomPath,
+		ProvenanceVerified: true, SBOMVerified: true,
 	}, nil
+}
+
+func (s *Service) verifySupplyChain(ctx context.Context, version string, artifact Artifact, cachePath string) (string, string, error) {
+	if artifact.AttestationURL == "" || artifact.SBOMURL == "" {
+		return "", "", errors.New("release artifact must include provenance and SBOM URLs")
+	}
+	provenanceURL, err := s.validateReleaseAssetURL(artifact.AttestationURL, version)
+	if err != nil {
+		return "", "", fmt.Errorf("provenance URL: %w", err)
+	}
+	sbomURL, err := s.validateReleaseAssetURL(artifact.SBOMURL, version)
+	if err != nil {
+		return "", "", fmt.Errorf("SBOM URL: %w", err)
+	}
+	provenanceJSON, err := s.downloadBytes(ctx, provenanceURL, maxProvenanceSize)
+	if err != nil {
+		return "", "", fmt.Errorf("download provenance bundle: %w", err)
+	}
+	sbomJSON, err := s.downloadBytes(ctx, sbomURL, maxSBOMSize)
+	if err != nil {
+		return "", "", fmt.Errorf("download SBOM: %w", err)
+	}
+	if err := validateSPDX(sbomJSON); err != nil {
+		return "", "", err
+	}
+	sbomDigest := sha256.Sum256(sbomJSON)
+	if s.provenance == nil {
+		return "", "", errors.New("provenance verification is unavailable")
+	}
+	if err := s.provenance.Verify(provenanceJSON, artifact.SHA256); err != nil {
+		return "", "", fmt.Errorf("verify artifact provenance: %w", err)
+	}
+	if err := s.provenance.Verify(provenanceJSON, hex.EncodeToString(sbomDigest[:])); err != nil {
+		return "", "", fmt.Errorf("verify SBOM provenance: %w", err)
+	}
+
+	directory := filepath.Dir(cachePath)
+	provenancePath := filepath.Join(directory, artifactFilename(provenanceURL.String(), "provenance"))
+	sbomPath := filepath.Join(directory, artifactFilename(sbomURL.String(), "sbom"))
+	if err := atomicWrite(provenancePath, provenanceJSON); err != nil {
+		return "", "", fmt.Errorf("cache verified provenance: %w", err)
+	}
+	if err := atomicWrite(sbomPath, sbomJSON); err != nil {
+		return "", "", fmt.Errorf("cache verified SBOM: %w", err)
+	}
+	return provenancePath, sbomPath, nil
+}
+
+func validateSPDX(contents []byte) error {
+	var document struct {
+		SPDXVersion string            `json:"spdxVersion"`
+		DataLicense string            `json:"dataLicense"`
+		SPDXID      string            `json:"SPDXID"`
+		Name        string            `json:"name"`
+		Packages    []json.RawMessage `json:"packages"`
+	}
+	if err := json.Unmarshal(contents, &document); err != nil {
+		return fmt.Errorf("decode SPDX SBOM: %w", err)
+	}
+	if !strings.HasPrefix(document.SPDXVersion, "SPDX-2.") || document.DataLicense != "CC0-1.0" || document.SPDXID != "SPDXRef-DOCUMENT" || strings.TrimSpace(document.Name) == "" || len(document.Packages) == 0 {
+		return errors.New("SBOM is not a complete SPDX 2.x document")
+	}
+	return nil
 }
 
 func (s *Service) validateURL(raw string) error {
@@ -311,6 +390,36 @@ func verifyFile(path string, artifact Artifact) (bool, error) {
 		return false, err
 	}
 	return strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), artifact.SHA256), nil
+}
+
+func atomicWrite(destination string, contents []byte) error {
+	temporary, err := os.CreateTemp(filepath.Dir(destination), ".evidence-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	committed := false
+	defer func() {
+		_ = temporary.Close()
+		if !committed {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if _, err := temporary.Write(contents); err != nil {
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	_ = os.Remove(destination)
+	if err := os.Rename(temporaryPath, destination); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 func pathFromURL(raw string) string {

@@ -17,6 +17,8 @@ type VerifiedArtifact = {
   size: number;
   cachePath: string;
   cacheHit: boolean;
+  provenanceVerified: boolean;
+  sbomVerified: boolean;
 };
 
 const token = window.location.hash.startsWith("#token=")
@@ -105,7 +107,7 @@ function App() {
           <button type="submit" disabled={verifying || !token}>{verifying ? "Verifying and caching…" : "Verify and cache release"}</button>
         </form>
         {releaseError && <div className="inline-result error" role="alert"><strong>Release rejected</strong><p>{releaseError}</p></div>}
-        {artifact && <div className="inline-result success"><strong>{artifact.cacheHit ? "Verified cached artifact" : "Downloaded and verified artifact"}</strong><dl><div><dt>Release</dt><dd>{artifact.version}</dd></div><div><dt>Target</dt><dd>{artifact.target}</dd></div><div><dt>Size</dt><dd>{artifact.size.toLocaleString()} bytes</dd></div><div><dt>SHA-256</dt><dd className="digest">{artifact.sha256}</dd></div></dl></div>}
+        {artifact && <div className="inline-result success"><strong>{artifact.cacheHit ? "Verified cached artifact" : "Downloaded and verified artifact"}</strong><dl><div><dt>Release</dt><dd>{artifact.version}</dd></div><div><dt>Target</dt><dd>{artifact.target}</dd></div><div><dt>Provenance</dt><dd>{artifact.provenanceVerified ? "Verified" : "Rejected"}</dd></div><div><dt>SBOM</dt><dd>{artifact.sbomVerified ? "Verified" : "Rejected"}</dd></div><div><dt>Size</dt><dd>{artifact.size.toLocaleString()} bytes</dd></div><div><dt>SHA-256</dt><dd className="digest">{artifact.sha256}</dd></div></dl></div>}
       </section>
       <section className="grid" aria-label="Initial deployment targets">
         {[

@@ -357,9 +357,11 @@ func TestLocalDockerRestoreAndRollbackUseSelectedBackupWithFreshSafetyIdentity(t
 		name        string
 		kind        lifecycle.OperationKind
 		fromVersion string
+		selected    bool
 	}{
-		{name: "restore", kind: lifecycle.Restore, fromVersion: "v1.2.3"},
-		{name: "rollback", kind: lifecycle.Rollback, fromVersion: "v1.2.4"},
+		{name: "restore", kind: lifecycle.Restore, fromVersion: "v1.2.3", selected: true},
+		{name: "rollback", kind: lifecycle.Rollback, fromVersion: "v1.2.4", selected: true},
+		{name: "repair", kind: lifecycle.Repair, fromVersion: "v1.2.3", selected: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			candidate := localInstallPlan()
@@ -411,7 +413,10 @@ func TestLocalDockerRestoreAndRollbackUseSelectedBackupWithFreshSafetyIdentity(t
 			}))
 			defer server.Close()
 			adapter := &LocalDocker{client: server.Client(), baseURL: server.URL, backupRoot: backupRoot}
-			backups := lifecycle.OperationBackups{Selected: &selected, Safety: &safety}
+			backups := lifecycle.OperationBackups{Safety: &safety}
+			if test.selected {
+				backups.Selected = &selected
+			}
 			if err := adapter.Apply(context.Background(), test.kind, candidate, test.fromVersion, stagedComposeBundle(t), backups, Credentials{}); err != nil {
 				t.Fatal(err)
 			}

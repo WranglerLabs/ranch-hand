@@ -97,7 +97,7 @@ func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, c
 	if err != nil {
 		return err
 	}
-	if kind == lifecycle.Update || kind == lifecycle.Restore || kind == lifecycle.Rollback {
+	if kind == lifecycle.Update || kind == lifecycle.Restore || kind == lifecycle.Rollback || kind == lifecycle.Repair {
 		return d.applyReplacement(ctx, kind, candidate, fromVersion, backups, identity.Image, deploymentID, project, hostIP, hostPort)
 	}
 	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
@@ -177,6 +177,10 @@ func (d *LocalDocker) applyReplacement(ctx context.Context, kind lifecycle.Opera
 		source = backups.Selected
 		if source == nil || fromVersion == candidate.Release.Version {
 			return errors.New("local Docker rollback requires a selected backup from a different target version")
+		}
+	case lifecycle.Repair:
+		if backups.Selected != nil || fromVersion != candidate.Release.Version {
+			return errors.New("local Docker repair requires the fresh safety backup and currently installed release")
 		}
 	default:
 		return fmt.Errorf("local Docker %s is not a replacement operation", kind)
@@ -380,7 +384,7 @@ func decodeHealthResponse(response *http.Response, output any) error {
 }
 
 func (d *LocalDocker) Recover(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, fromVersion string, backups lifecycle.OperationBackups, _ Credentials) error {
-	if kind == lifecycle.Update || kind == lifecycle.Restore || kind == lifecycle.Rollback {
+	if kind == lifecycle.Update || kind == lifecycle.Restore || kind == lifecycle.Rollback || kind == lifecycle.Repair {
 		return d.recoverReplacement(ctx, candidate, fromVersion, backups.Safety)
 	}
 	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {

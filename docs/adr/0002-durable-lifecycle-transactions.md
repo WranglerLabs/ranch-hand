@@ -89,14 +89,14 @@ A local journal adds code and durable-state compatibility requirements, but thos
 - Retention and redacted diagnostics can operate on structured journals without collecting credentials.
 - Local Docker backups are streamed through the Engine archive API while the owned container is stopped, stored beneath Ranch Hand's user-scoped root, hashed before inventory registration, and followed by restart/readiness verification.
 - Local Docker update uses a new owned volume seeded from the exact recorded backup. The prior stopped container and volume remain untouched in the rollback pool until the new image passes readiness and exact release-identity verification.
-- Local Docker restore and rollback keep selected input and fresh safety backups distinct, use a new owned volume, and recover the exact preserved pre-operation container when activation fails.
+- Local Docker restore and rollback keep selected input and fresh safety backups distinct; repair uses its fresh safety backup as reconstruction input. All use a new owned volume and recover the exact preserved pre-operation container when activation fails.
 
 ## Action Items
 
 1. [x] Implement stable deployment identity, exclusive active-operation records, atomic transitions, plan snapshots, and event-chain validation.
 2. [x] Enforce backup-first update and operation-specific commit requirements.
 3. [x] Implement the lifecycle coordinator, exact-backup references, backup inventory, and automatic recovery sequencing.
-4. [x] Implement bounded evaluation install methods for all four initial targets and expose them only through coordinator-driven loopback operations. Local Docker consistent backup, update, restore, and rollback are also complete.
+4. [x] Implement bounded evaluation install methods for all four initial targets and expose them only through coordinator-driven loopback operations. Local Docker consistent backup, update, restore, rollback, and repair are also complete.
 5. [ ] Add active-operation resume/recover controls to the loopback API and Windows UI.
 6. [x] Add durable installation/current-version records and an explicit lifecycle schema migration policy.
 7. [ ] Add rollback-pool retention and pruning controls.

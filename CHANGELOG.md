@@ -2,6 +2,14 @@
 
 All notable Ranch Hand changes will be recorded here. The project uses semantic versions; release candidates are not generally available releases.
 
+## Unreleased
+
+### Documentation
+
+- Added a task-oriented Windows operator guide covering acquisition, verification,
+  launch, target prerequisites, the guided workflow, lifecycle operations, local
+  state, diagnostics, and the manual RepoWrangler deployment alternative.
+
 ## [0.1.0-rc.1] - 2026-07-17
 
 ### Added

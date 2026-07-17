@@ -24,7 +24,7 @@ Plans must never contain passwords, tokens, private keys, client secrets, or pro
 
 The local interface accepts an explicit RepoWrangler version and deployment target. Ranch Hand retrieves the official versioned manifest and target bundle over HTTPS, restricts redirects to the trusted GitHub release infrastructure, enforces response-size limits, verifies the declared byte count and SHA-256, and atomically stores the verified bundle in the user's versioned application cache. A matching cached file is hashed again before reuse; partial or mismatched downloads are removed.
 
-SBOM and build-attestation verification are subsequent release-candidate gates. Their URLs are validated now, but this early build does not yet classify them as verified.
+Ranch Hand also downloads the release's SPDX SBOM and Sigstore provenance bundle. It verifies the Sigstore trust root through TUF, the certificate and transparency-log evidence, the exact RepoWrangler release-workflow identity, the SLSA provenance predicate, and both the deployment bundle and SBOM digests before classifying the release as verified. This verification is built into Ranch Hand and does not require a GitHub account, GitHub CLI, or Cosign installation.
 
 ## Build from source
 

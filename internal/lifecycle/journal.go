@@ -166,8 +166,21 @@ func (s *Store) Begin(kind OperationKind, candidate plan.DeploymentPlan, fromVer
 	if existing, err := s.readActive(activePath, deploymentID); err == nil && !terminal(existing.Phase) {
 		return Journal{}, fmt.Errorf("deployment already has active %s operation %s in phase %s", existing.Kind, existing.OperationID, existing.Phase)
 	} else if err == nil && terminal(existing.Phase) {
-		_ = os.Remove(activePath)
+		// A committed journal can survive a process interruption between its
+		// durable write and installation-record/lock finalization. Reconcile that
+		// state before allowing another operation to acquire the deployment.
+		if existing.Phase == Committed && existing.Kind != Backup {
+			if _, reconcileErr := s.recordInstallationLocked(existing); reconcileErr != nil {
+				return Journal{}, fmt.Errorf("reconcile committed installation state: %w", reconcileErr)
+			}
+		}
+		if removeErr := removeLock(activePath, existing.OperationID); removeErr != nil {
+			return Journal{}, removeErr
+		}
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return Journal{}, err
+	}
+	if err := s.validateOperationCurrentStateLocked(kind, deploymentID, fromVersion); err != nil {
 		return Journal{}, err
 	}
 	lock, err := os.OpenFile(activePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -231,6 +244,17 @@ func (s *Store) TransitionWithReference(deploymentID, operationID string, next P
 	if err != nil {
 		return Journal{}, err
 	}
+	if journal.Phase == Committed && next == Committed {
+		if journal.Kind != Backup {
+			if _, err := s.recordInstallationLocked(journal); err != nil {
+				return journal, err
+			}
+		}
+		if err := removeLock(filepath.Join(directory, "active"), operationID); err != nil {
+			return journal, err
+		}
+		return journal, nil
+	}
 	if !transitions[journal.Phase][next] {
 		return Journal{}, fmt.Errorf("invalid lifecycle transition from %s to %s", journal.Phase, next)
 	}
@@ -252,6 +276,13 @@ func (s *Store) TransitionWithReference(deploymentID, operationID string, next P
 	journal.UpdatedAt = now
 	if err := atomicWrite(journalPath, journal); err != nil {
 		return Journal{}, err
+	}
+	if next == Committed && journal.Kind != Backup {
+		if _, err := s.recordInstallationLocked(journal); err != nil {
+			// Keep the operation lock in place. Repeating the committed transition
+			// or beginning a later operation will reconcile this exact journal.
+			return journal, err
+		}
 	}
 	if terminal(next) {
 		if err := removeLock(filepath.Join(directory, "active"), operationID); err != nil {

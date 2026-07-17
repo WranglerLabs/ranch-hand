@@ -108,6 +108,18 @@ func coordinatorForTest(t *testing.T, mutator *fakeMutator, staged *fakeStager) 
 	return coordinator
 }
 
+func seedInstalledVersion(t *testing.T, coordinator *Coordinator, mutator *fakeMutator, staged *fakeStager, version string) {
+	t.Helper()
+	candidate := operationPlan(version)
+	if result, err := coordinator.Run(context.Background(), Request{Kind: lifecycle.Install, Plan: candidate, Artifact: operationArtifact(candidate)}); err != nil || result.Journal.Phase != lifecycle.Committed {
+		t.Fatalf("seed install failed: %+v, %v", result, err)
+	}
+	mutator.calls = nil
+	mutator.appliedBackup = nil
+	mutator.recoveredBackup = nil
+	staged.calls = 0
+}
+
 func TestInstallCommitsAfterApplyAndVerify(t *testing.T) {
 	mutator, staged := &fakeMutator{}, &fakeStager{}
 	coordinator := coordinatorForTest(t, mutator, staged)
@@ -124,6 +136,7 @@ func TestInstallCommitsAfterApplyAndVerify(t *testing.T) {
 func TestUpdateBacksUpBeforeApply(t *testing.T) {
 	mutator, staged := &fakeMutator{}, &fakeStager{}
 	coordinator := coordinatorForTest(t, mutator, staged)
+	seedInstalledVersion(t, coordinator, mutator, staged, "v1.2.3")
 	candidate := operationPlan("v1.2.4")
 	result, err := coordinator.Run(context.Background(), Request{Kind: lifecycle.Update, Plan: candidate, FromVersion: "v1.2.3", Artifact: operationArtifact(candidate)})
 	if err != nil || result.Journal.Phase != lifecycle.Committed || result.Backup == nil {
@@ -138,8 +151,11 @@ func TestUpdateBacksUpBeforeApply(t *testing.T) {
 }
 
 func TestFailedVerificationRecoversExactBackup(t *testing.T) {
-	mutator := &fakeMutator{verifyError: errors.New("unhealthy")}
-	coordinator := coordinatorForTest(t, mutator, &fakeStager{})
+	mutator := &fakeMutator{}
+	staged := &fakeStager{}
+	coordinator := coordinatorForTest(t, mutator, staged)
+	seedInstalledVersion(t, coordinator, mutator, staged, "v1.2.3")
+	mutator.verifyError = errors.New("unhealthy")
 	candidate := operationPlan("v1.2.4")
 	result, err := coordinator.Run(context.Background(), Request{Kind: lifecycle.Update, Plan: candidate, FromVersion: "v1.2.3", Artifact: operationArtifact(candidate)})
 	if err == nil || !result.Recovered || result.Journal.Phase != lifecycle.Recovered {
@@ -153,6 +169,7 @@ func TestFailedVerificationRecoversExactBackup(t *testing.T) {
 func TestBackupOperationDoesNotStageOrApply(t *testing.T) {
 	mutator, staged := &fakeMutator{}, &fakeStager{}
 	coordinator := coordinatorForTest(t, mutator, staged)
+	seedInstalledVersion(t, coordinator, mutator, staged, "v1.2.3")
 	candidate := operationPlan("v1.2.3")
 	result, err := coordinator.Run(context.Background(), Request{Kind: lifecycle.Backup, Plan: candidate, FromVersion: "v1.2.3"})
 	if err != nil || result.Journal.Phase != lifecycle.Committed || result.Backup == nil {

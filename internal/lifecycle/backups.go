@@ -25,7 +25,7 @@ const (
 )
 
 var validBackupKinds = map[BackupKind]bool{LocalArchive: true, AzureSnapshot: true, CloudflareD1Export: true, RemoteArchive: true}
-var validBackupTargets = map[string]bool{"azure-container-apps": true, "cloudflare": true, "local-compose": true, "remote-linux-compose": true}
+var validLifecycleTargets = map[string]bool{"azure-container-apps": true, "cloudflare": true, "local-compose": true, "remote-linux-compose": true}
 
 type BackupArtifact struct {
 	Kind    BackupKind `json:"kind"`
@@ -175,7 +175,7 @@ func (a BackupArtifact) Validate() error {
 }
 
 func (r BackupRecord) Validate() error {
-	if r.SchemaVersion != BackupSchemaVersion || !idPattern.MatchString(r.BackupID) || !idPattern.MatchString(r.DeploymentID) || !idPattern.MatchString(r.OperationID) || !validBackupTargets[r.Target] || r.CreatedAt.IsZero() || !versionPattern.MatchString(r.Version) {
+	if r.SchemaVersion != BackupSchemaVersion || !idPattern.MatchString(r.BackupID) || !idPattern.MatchString(r.DeploymentID) || !idPattern.MatchString(r.OperationID) || !validLifecycleTargets[r.Target] || r.CreatedAt.IsZero() || !versionPattern.MatchString(r.Version) {
 		return errors.New("backup record identity is invalid")
 	}
 	if err := r.Artifact.Validate(); err != nil {

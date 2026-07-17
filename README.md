@@ -55,7 +55,7 @@ The staging record contains the size and SHA-256 of every extracted file. Ranch 
 
 Lifecycle mutations use a durable, secret-free journal keyed to the stable target environment. The journal permits one active operation per deployment, embeds the canonical plan snapshot, replaces every phase atomically, and detects corrupted phase history. An update cannot commit until backup, staging, apply, and health verification have all completed. If activation or verification fails, recovery is an explicit journaled path rather than an undocumented retry.
 
-The journal coordinator is implemented and tested; target apply methods are not wired yet. See [ADR-0002](docs/adr/0002-durable-lifecycle-transactions.md) for phase rules, recovery semantics, and trade-offs.
+The coordinator implements install, backup, and backup-first update sequencing. It binds `backup-complete` to an exact validated backup record, stages only the verified plan artifact, and automatically enters recovery if apply, health verification, or the post-apply journal write fails. Target mutation methods are not wired yet, so the UI still cannot apply infrastructure. See [ADR-0002](docs/adr/0002-durable-lifecycle-transactions.md) for phase rules, recovery semantics, and trade-offs.
 
 ## Build from source
 

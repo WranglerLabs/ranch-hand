@@ -92,6 +92,7 @@ A local journal adds code and durable-state compatibility requirements, but thos
 
 1. [x] Implement stable deployment identity, exclusive active-operation records, atomic transitions, plan snapshots, and event-chain validation.
 2. [x] Enforce backup-first update and operation-specific commit requirements.
-3. [ ] Route adapter apply and verification methods through a lifecycle coordinator.
-4. [ ] Add active-operation resume/recover controls to the loopback API and Windows UI.
-5. [ ] Add installation records, backup inventory, rollback-pool retention, and journal schema migration policy.
+3. [x] Implement the lifecycle coordinator, exact-backup references, backup inventory, and automatic recovery sequencing.
+4. [ ] Implement target mutation methods and expose only coordinator-driven operations through the loopback API.
+5. [ ] Add active-operation resume/recover controls to the loopback API and Windows UI.
+6. [ ] Add installation records, rollback-pool retention, and journal schema migration policy.

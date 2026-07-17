@@ -44,7 +44,11 @@ func transition(t *testing.T, store *Store, journal Journal, phases ...Phase) Jo
 	t.Helper()
 	var err error
 	for _, phase := range phases {
-		journal, err = store.Transition(journal.DeploymentID, journal.OperationID, phase)
+		if phase == BackupComplete {
+			journal, err = store.TransitionWithReference(journal.DeploymentID, journal.OperationID, phase, strings.Repeat("c", 32))
+		} else {
+			journal, err = store.Transition(journal.DeploymentID, journal.OperationID, phase)
+		}
 		if err != nil {
 			t.Fatalf("transition to %s failed: %v", phase, err)
 		}

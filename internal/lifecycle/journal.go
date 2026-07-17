@@ -51,6 +51,7 @@ type Event struct {
 	Phase        Phase     `json:"phase"`
 	RecordedAt   time.Time `json:"recordedAt"`
 	PreviousHash string    `json:"previousHash,omitempty"`
+	ReferenceID  string    `json:"referenceId,omitempty"`
 	Hash         string    `json:"hash"`
 }
 
@@ -84,7 +85,7 @@ var (
 	transitions    = map[Phase]map[Phase]bool{
 		Prepared:        {BackupComplete: true, Staged: true, Applied: true, Failed: true},
 		BackupComplete:  {Staged: true, Applied: true, Committed: true, Failed: true},
-		Staged:          {Applied: true, Failed: true},
+		Staged:          {Applied: true, RecoveryStarted: true, Failed: true},
 		Applied:         {Verified: true, RecoveryStarted: true, Failed: true},
 		Verified:        {Committed: true, RecoveryStarted: true, Failed: true},
 		RecoveryStarted: {Recovered: true, Failed: true},
@@ -192,7 +193,7 @@ func (s *Store) Begin(kind OperationKind, candidate plan.DeploymentPlan, fromVer
 		Kind: kind, Target: candidate.Target.Kind, FromVersion: fromVersion, ToVersion: candidate.Release.Version,
 		PlanSHA256: hex.EncodeToString(planDigest[:]), Plan: append(json.RawMessage(nil), canonical...), StartedAt: started, UpdatedAt: started,
 	}
-	journal.Events = append(journal.Events, makeEvent(1, Prepared, started, journalHeaderHash(journal)))
+	journal.Events = append(journal.Events, makeEvent(1, Prepared, started, journalHeaderHash(journal), ""))
 	journal.Phase = Prepared
 	if err := atomicWrite(filepath.Join(directory, "operations", operationID+".json"), journal); err != nil {
 		return Journal{}, err
@@ -205,6 +206,10 @@ func (s *Store) Begin(kind OperationKind, candidate plan.DeploymentPlan, fromVer
 }
 
 func (s *Store) Transition(deploymentID, operationID string, next Phase) (Journal, error) {
+	return s.TransitionWithReference(deploymentID, operationID, next, "")
+}
+
+func (s *Store) TransitionWithReference(deploymentID, operationID string, next Phase, referenceID string) (Journal, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !idPattern.MatchString(deploymentID) || !idPattern.MatchString(operationID) {
@@ -229,6 +234,12 @@ func (s *Store) Transition(deploymentID, operationID string, next Phase) (Journa
 	if !transitions[journal.Phase][next] {
 		return Journal{}, fmt.Errorf("invalid lifecycle transition from %s to %s", journal.Phase, next)
 	}
+	if next == BackupComplete && !idPattern.MatchString(referenceID) {
+		return Journal{}, errors.New("backup-complete requires a valid backup reference")
+	}
+	if referenceID != "" && !idPattern.MatchString(referenceID) {
+		return Journal{}, errors.New("lifecycle reference identifier is invalid")
+	}
 	if next == Committed {
 		if err := validateCommitSequence(journal); err != nil {
 			return Journal{}, err
@@ -236,7 +247,7 @@ func (s *Store) Transition(deploymentID, operationID string, next Phase) (Journa
 	}
 	now := s.now().UTC()
 	previousHash := journal.Events[len(journal.Events)-1].Hash
-	journal.Events = append(journal.Events, makeEvent(len(journal.Events)+1, next, now, previousHash))
+	journal.Events = append(journal.Events, makeEvent(len(journal.Events)+1, next, now, previousHash, referenceID))
 	journal.Phase = next
 	journal.UpdatedAt = now
 	if err := atomicWrite(journalPath, journal); err != nil {
@@ -309,7 +320,7 @@ func validateCommitSequence(journal Journal) error {
 }
 
 func readJournal(filename string) (Journal, error) {
-	contents, err := os.ReadFile(filename)
+	contents, err := readRegularFile(filename, 2<<20)
 	if err != nil {
 		return Journal{}, err
 	}
@@ -350,11 +361,17 @@ func (j Journal) Validate() error {
 		if event.RecordedAt.IsZero() || (index > 0 && event.RecordedAt.Before(j.Events[index-1].RecordedAt)) {
 			return errors.New("lifecycle journal event time is invalid")
 		}
-		if event.Sequence != index+1 || event.PreviousHash != previous || event.Hash != makeEvent(event.Sequence, event.Phase, event.RecordedAt, event.PreviousHash).Hash {
+		if event.Sequence != index+1 || event.PreviousHash != previous || event.Hash != makeEvent(event.Sequence, event.Phase, event.RecordedAt, event.PreviousHash, event.ReferenceID).Hash {
 			return errors.New("lifecycle journal event chain is invalid")
 		}
 		if index > 0 && !transitions[j.Events[index-1].Phase][event.Phase] {
 			return errors.New("lifecycle journal contains an invalid phase transition")
+		}
+		if event.Phase == BackupComplete && !idPattern.MatchString(event.ReferenceID) {
+			return errors.New("lifecycle backup event has no valid backup reference")
+		}
+		if event.ReferenceID != "" && !idPattern.MatchString(event.ReferenceID) {
+			return errors.New("lifecycle event reference is invalid")
 		}
 		previous = event.Hash
 	}
@@ -389,10 +406,10 @@ func validateOperationVersions(kind OperationKind, fromVersion string) error {
 	return nil
 }
 
-func makeEvent(sequence int, phase Phase, recordedAt time.Time, previousHash string) Event {
-	payload := fmt.Sprintf("%d\x00%s\x00%s\x00%s", sequence, phase, recordedAt.UTC().Format(time.RFC3339Nano), previousHash)
+func makeEvent(sequence int, phase Phase, recordedAt time.Time, previousHash, referenceID string) Event {
+	payload := fmt.Sprintf("%d\x00%s\x00%s\x00%s\x00%s", sequence, phase, recordedAt.UTC().Format(time.RFC3339Nano), previousHash, referenceID)
 	digest := sha256.Sum256([]byte(payload))
-	return Event{Sequence: sequence, Phase: phase, RecordedAt: recordedAt.UTC(), PreviousHash: previousHash, Hash: hex.EncodeToString(digest[:])}
+	return Event{Sequence: sequence, Phase: phase, RecordedAt: recordedAt.UTC(), PreviousHash: previousHash, ReferenceID: referenceID, Hash: hex.EncodeToString(digest[:])}
 }
 
 func randomID() (string, error) {
@@ -440,19 +457,34 @@ func atomicWriteBytes(filename string, contents []byte) error {
 }
 
 func readSmallFile(filename string, maximum int64) (string, error) {
-	file, err := os.Open(filename)
+	contents, err := readRegularFile(filename, maximum)
 	if err != nil {
 		return "", err
+	}
+	return string(contents), nil
+}
+
+func readRegularFile(filename string, maximum int64) ([]byte, error) {
+	details, err := os.Lstat(filename)
+	if err != nil {
+		return nil, err
+	}
+	if !details.Mode().IsRegular() || details.Size() > maximum {
+		return nil, errors.New("lifecycle state file is not a bounded regular file")
+	}
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, err
 	}
 	defer file.Close()
 	contents, err := io.ReadAll(io.LimitReader(file, maximum+1))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if int64(len(contents)) > maximum {
-		return "", errors.New("lifecycle lock exceeds safety limit")
+		return nil, errors.New("lifecycle state file exceeds safety limit")
 	}
-	return string(contents), nil
+	return contents, nil
 }
 
 func removeLock(filename, operationID string) error {

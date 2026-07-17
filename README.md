@@ -2,7 +2,7 @@
 
 Ranch Hand is the standalone, Windows-first lifecycle manager for [RepoWrangler](https://github.com/WranglerLabs/repo-wrangler). It is for operators who want to install and manage RepoWrangler without cloning or forking its source repository. Contributors and advanced operators can still use RepoWrangler's documented deployment recipes directly.
 
-> **Status:** active implementation. The secure local application shell, immutable release verification/cache, secret-free plan creation/export, artifact preflight, non-mutating dry run, and live target-native connectivity preflight are working. Ranch Hand can install, consistently back up, and backup-first update a loopback-only local Docker evaluation instance. The other target mutations and production lifecycle remain under implementation; this repository is not a production installer release.
+> **Status:** active implementation. The secure local application shell, immutable release verification/cache, secret-free plan creation/export, artifact preflight, non-mutating dry run, and live target-native connectivity preflight are working. Ranch Hand can install, consistently back up, and backup-first update a loopback-only local Docker evaluation instance, and can install an Azure Container Apps evaluation instance into a new dedicated resource group. The other target mutations and production lifecycle remain under implementation; this repository is not a production installer release.
 
 ## First release scope
 
@@ -44,6 +44,14 @@ Local updates are backup-first and copy-on-write. Ranch Hand verifies the curren
 
 Explicit rollback, restore, rollback-pool retention controls, and production credential configuration for this target are not enabled yet. Manual clone/fork and custom automation remain supported RepoWrangler deployment options.
 
+## Azure Container Apps evaluation install
+
+The first Azure mutator installs only into a brand-new dedicated resource group. Live preflight confirms subscription access, `Microsoft.App` registration, that the resource-group name is unused, and that no custom domain was requested. Apply creates the group with exact Ranch Hand ownership/deployment/version tags and submits the verified bundle's compiled ARM template directly to Azure Resource Manager with the digest-pinned public image.
+
+This profile enables demo mode and SQLite on Azure Files. It does not configure production provider secrets, PostgreSQL, an existing/shared resource group, a custom domain, backup, or update. Azure resources are billable. The interface requires a fresh in-memory ARM token and explicit cost/dedicated-boundary confirmation before apply.
+
+Ranch Hand polls the ARM deployment, verifies the resulting Container App uses the expected immutable image, requires an Azure-managed `*.azurecontainerapps.io` HTTPS endpoint, and validates both readiness and the exact release identity. Failed-install recovery deletes the resource group only when its tags prove it belongs to the exact Ranch Hand deployment; an unowned or differently owned group is never deleted. See [ADR-0003](docs/adr/0003-dedicated-azure-evaluation-boundary.md).
+
 ## Live target preflight
 
 The interface can run a separate live connectivity preflight after the offline checks succeed:
@@ -67,7 +75,7 @@ The staging record contains the size and SHA-256 of every extracted file. Ranch 
 
 Lifecycle mutations use a durable, secret-free journal keyed to the stable target environment. The journal permits one active operation per deployment, embeds the canonical plan snapshot, replaces every phase atomically, and detects corrupted phase history. An update cannot commit until backup, staging, apply, and health verification have all completed. If activation or verification fails, recovery is an explicit journaled path rather than an undocumented retry.
 
-The coordinator implements install, backup, and backup-first update sequencing. It binds `backup-complete` to an exact validated backup record, stages only the verified plan artifact, and automatically enters recovery if apply, health verification, or the post-apply journal write fails. The local Docker adapter is wired for the evaluation install, consistent backup, and copy-on-write update described above; explicit restore/rollback and the other target mutations remain disabled. See [ADR-0002](docs/adr/0002-durable-lifecycle-transactions.md) for phase rules, recovery semantics, and trade-offs.
+The coordinator implements install, backup, and backup-first update sequencing. It binds `backup-complete` to an exact validated backup record, stages only the verified plan artifact, and automatically enters recovery if apply, health verification, or the post-apply journal write fails. Recovery receives a cancellation-independent bounded context so a closed browser request cannot abandon a partially mutated target. The local Docker adapter is wired for evaluation install, consistent backup, and copy-on-write update; the Azure adapter is wired for the dedicated evaluation install above. Explicit restore/rollback and the other target mutations remain disabled. See [ADR-0002](docs/adr/0002-durable-lifecycle-transactions.md) for phase rules, recovery semantics, and trade-offs.
 
 ## Build from source
 

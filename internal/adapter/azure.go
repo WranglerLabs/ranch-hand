@@ -5,14 +5,18 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/WranglerLabs/ranch-hand/internal/plan"
 )
 
 type AzureContainerApps struct {
-	client  *http.Client
-	baseURL string
+	client         *http.Client
+	healthClient   *http.Client
+	baseURL        string
+	mu             sync.RWMutex
+	expectedImages map[string]string
 }
 
 func NewAzureContainerApps() *AzureContainerApps {
@@ -23,7 +27,7 @@ func NewAzureContainerApps() *AzureContainerApps {
 }
 
 func newAzureContainerApps(client *http.Client, baseURL string) *AzureContainerApps {
-	return &AzureContainerApps{client: client, baseURL: strings.TrimRight(baseURL, "/")}
+	return &AzureContainerApps{client: client, healthClient: client, baseURL: strings.TrimRight(baseURL, "/"), expectedImages: make(map[string]string)}
 }
 
 func (a *AzureContainerApps) Preflight(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) Report {
@@ -58,6 +62,21 @@ func (a *AzureContainerApps) Preflight(ctx context.Context, candidate plan.Deplo
 		return report
 	}
 	appendCheck(&report, "azure-container-apps-provider", true, "The Microsoft.App resource provider is registered.")
+	resourceGroupURL := a.baseURL + "/subscriptions/" + subscriptionID + "/resourcegroups/" + url.PathEscape(candidate.Configuration["resourceGroup"]) + "?api-version=2022-09-01"
+	status, groupErr := controlPlaneJSON(ctx, a.client, http.MethodGet, resourceGroupURL, headers, nil)
+	if groupErr == nil || status != http.StatusNotFound {
+		if groupErr == nil {
+			appendCheck(&report, "azure-dedicated-resource-group", false, "The first Ranch Hand Azure adapter requires a new dedicated resource group so failed-install recovery cannot affect unrelated resources.")
+		} else {
+			appendCheck(&report, "azure-dedicated-resource-group", false, "Azure Resource Manager could not verify that the dedicated resource group is available: "+groupErr.Error())
+		}
+		return report
+	}
+	if candidate.Configuration["customDomain"] != "" {
+		appendCheck(&report, "azure-custom-domain", false, "Custom-domain certificate binding is not enabled in this evaluation adapter; use the Azure-managed Container Apps hostname.")
+		return report
+	}
+	appendCheck(&report, "azure-dedicated-resource-group", true, "The selected dedicated resource group name is available.")
 	appendCheck(&report, "azure-native-https", true, "The verified ARM bundle uses Azure Container Apps managed HTTPS ingress with insecure traffic disabled.")
 	report.Ready = true
 	return report

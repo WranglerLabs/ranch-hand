@@ -52,7 +52,7 @@ type stageManifest struct {
 	Files          []stagedFile `json:"files"`
 }
 
-type bundleIdentity struct {
+type Identity struct {
 	SchemaVersion          string `json:"schemaVersion"`
 	Product                string `json:"product"`
 	Version                string `json:"version"`
@@ -303,17 +303,43 @@ func safeArchivePath(name, family string) (string, error) {
 }
 
 func validateBundleIdentity(root string, verified productrelease.VerifiedArtifact, family string) error {
+	identity, err := readIdentity(root)
+	if err != nil {
+		return err
+	}
+	return validateIdentity(identity, root, verified.Version, family)
+}
+
+func ReadIdentity(staged StagedBundle) (Identity, error) {
+	if staged.Product != productrelease.Product || productrelease.ValidateVersion(staged.Version) != nil || productrelease.ValidateTarget(staged.Target) != nil || strings.TrimSpace(staged.Path) == "" {
+		return Identity{}, errors.New("staged bundle identity is invalid")
+	}
+	identity, err := readIdentity(staged.Path)
+	if err != nil {
+		return Identity{}, err
+	}
+	if err := validateIdentity(identity, staged.Path, staged.Version, targetFamily(staged.Target)); err != nil {
+		return Identity{}, err
+	}
+	return identity, nil
+}
+
+func readIdentity(root string) (Identity, error) {
 	contents, err := os.ReadFile(filepath.Join(root, "bundle.json"))
 	if err != nil {
-		return fmt.Errorf("read bundle identity: %w", err)
+		return Identity{}, fmt.Errorf("read bundle identity: %w", err)
 	}
-	var identity bundleIdentity
+	var identity Identity
 	decoder := json.NewDecoder(strings.NewReader(string(contents)))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&identity); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
-		return errors.New("bundle identity is invalid")
+		return Identity{}, errors.New("bundle identity is invalid")
 	}
-	if identity.SchemaVersion != "1.0" || identity.Product != productrelease.Product || identity.Version != verified.Version || identity.TargetFamily != family {
+	return identity, nil
+}
+
+func validateIdentity(identity Identity, root, version, family string) error {
+	if identity.SchemaVersion != "1.0" || identity.Product != productrelease.Product || identity.Version != version || identity.TargetFamily != family {
 		return errors.New("bundle identity does not match the verified release")
 	}
 	switch family {

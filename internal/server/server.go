@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +17,8 @@ import (
 
 	"github.com/WranglerLabs/ranch-hand/internal/adapter"
 	"github.com/WranglerLabs/ranch-hand/internal/bundle"
+	"github.com/WranglerLabs/ranch-hand/internal/lifecycle"
+	"github.com/WranglerLabs/ranch-hand/internal/operations"
 	"github.com/WranglerLabs/ranch-hand/internal/plan"
 	productrelease "github.com/WranglerLabs/ranch-hand/internal/release"
 )
@@ -37,6 +41,10 @@ type bundleStager interface {
 	Stage(productrelease.VerifiedArtifact) (bundle.StagedBundle, error)
 }
 
+type operationRunner interface {
+	Run(context.Context, operations.Request) (operations.Result, error)
+}
+
 type Server struct {
 	token           string
 	version         string
@@ -46,6 +54,9 @@ type Server struct {
 	verified        map[string]productrelease.VerifiedArtifact
 	targets         targetPreflighter
 	stager          bundleStager
+	coordinator     operationRunner
+	readyMu         sync.RWMutex
+	readyPlans      map[string]bool
 }
 
 func New(token, version string, ui fs.FS) http.Handler {
@@ -53,7 +64,15 @@ func New(token, version string, ui fs.FS) http.Handler {
 	if err != nil {
 		verifier = nil
 	}
-	return NewWithReleaseVerifier(token, version, ui, verifier)
+	targets := adapter.NewRegistry()
+	stager, stageErr := bundle.NewStager("")
+	store, storeErr := lifecycle.NewStore("")
+	var coordinator operationRunner
+	if stageErr == nil && storeErr == nil {
+		localDocker := adapter.NewLocalDocker()
+		coordinator, _ = operations.NewCoordinator(store, stager, operations.NewRegistry(map[string]operations.Mutator{"local-compose": localDocker}))
+	}
+	return newWithServices(token, version, ui, verifier, targets, stager, coordinator)
 }
 
 func NewWithReleaseVerifier(token, version string, ui fs.FS, verifier releaseVerifier) http.Handler {
@@ -62,11 +81,11 @@ func NewWithReleaseVerifier(token, version string, ui fs.FS, verifier releaseVer
 
 func NewWithDependencies(token, version string, ui fs.FS, verifier releaseVerifier, targets targetPreflighter) http.Handler {
 	stager, _ := bundle.NewStager("")
-	return newWithServices(token, version, ui, verifier, targets, stager)
+	return newWithServices(token, version, ui, verifier, targets, stager, nil)
 }
 
-func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, targets targetPreflighter, stager bundleStager) http.Handler {
-	s := &Server{token: token, version: version, ui: ui, releaseVerifier: verifier, verified: make(map[string]productrelease.VerifiedArtifact), targets: targets, stager: stager}
+func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, targets targetPreflighter, stager bundleStager, coordinator operationRunner) http.Handler {
+	s := &Server{token: token, version: version, ui: ui, releaseVerifier: verifier, verified: make(map[string]productrelease.VerifiedArtifact), targets: targets, stager: stager, coordinator: coordinator, readyPlans: make(map[string]bool)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", s.live)
 	mux.Handle("GET /api/v1/status", s.authorize(http.HandlerFunc(s.status)))
@@ -77,9 +96,65 @@ func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, 
 	mux.Handle("POST /api/v1/plans/dry-run", s.authorize(http.HandlerFunc(s.dryRunPlan)))
 	mux.Handle("POST /api/v1/targets/preflight", s.authorize(http.HandlerFunc(s.preflightTarget)))
 	mux.Handle("POST /api/v1/bundles/stage", s.authorize(http.HandlerFunc(s.stageBundle)))
+	mux.Handle("POST /api/v1/operations/run", s.authorize(http.HandlerFunc(s.runOperation)))
 	mux.Handle("POST /api/v1/releases/verify", s.authorize(http.HandlerFunc(s.verifyRelease)))
 	mux.Handle("/", s.spa())
 	return s.securityHeaders(mux)
+}
+
+func (s *Server) runOperation(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request rejected"})
+		return
+	}
+	if s.coordinator == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "lifecycle operations are unavailable"})
+		return
+	}
+	var request struct {
+		Kind        lifecycle.OperationKind `json:"kind"`
+		Plan        plan.DeploymentPlan     `json:"plan"`
+		FromVersion string                  `json:"fromVersion,omitempty"`
+		Credentials adapter.Credentials     `json:"credentials"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxTargetRequestSize))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid lifecycle operation request"})
+		return
+	}
+	defer request.Credentials.Clear()
+	if request.Kind != lifecycle.Install || request.Plan.Target.Kind != "local-compose" {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "only local Docker install is enabled in this build; other mutators remain under implementation"})
+		return
+	}
+	if err := request.Plan.Validate(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	verified, found := s.verifiedPlan(request.Plan)
+	if !found {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "the operation plan does not match a release verified during this Ranch Hand session"})
+		return
+	}
+	key, err := planSessionKey(request.Plan)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.readyMu.RLock()
+	ready := s.readyPlans[key]
+	s.readyMu.RUnlock()
+	if !ready {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "run a successful live target preflight for this exact plan before installation"})
+		return
+	}
+	result, err := s.coordinator.Run(r.Context(), operations.Request{Kind: request.Kind, Plan: request.Plan, FromVersion: request.FromVersion, Artifact: verified, Credentials: request.Credentials})
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": err.Error(), "operation": result})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"completed": true, "operation": result})
 }
 
 func (s *Server) stageBundle(w http.ResponseWriter, r *http.Request) {
@@ -147,7 +222,23 @@ func (s *Server) preflightTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	report := s.targets.Preflight(r.Context(), request.Plan, request.Credentials)
+	if report.Ready {
+		if key, err := planSessionKey(request.Plan); err == nil {
+			s.readyMu.Lock()
+			s.readyPlans[key] = true
+			s.readyMu.Unlock()
+		}
+	}
 	writeJSON(w, http.StatusOK, report)
+}
+
+func planSessionKey(candidate plan.DeploymentPlan) (string, error) {
+	canonical, err := plan.CanonicalJSON(candidate)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(canonical)
+	return hex.EncodeToString(digest[:]), nil
 }
 
 func (s *Server) live(w http.ResponseWriter, _ *http.Request) {

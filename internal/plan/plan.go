@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -41,10 +42,12 @@ var supportedTargets = map[string]bool{
 }
 
 var (
-	versionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$`)
-	digestPattern  = regexp.MustCompile(`^[a-f0-9]{64}$`)
-	namePattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,119}$`)
-	keyPattern     = regexp.MustCompile(`^[a-z][A-Za-z0-9]{0,63}$`)
+	versionPattern             = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$`)
+	digestPattern              = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	namePattern                = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,119}$`)
+	keyPattern                 = regexp.MustCompile(`^[a-z][A-Za-z0-9]{0,63}$`)
+	dockerProjectPattern       = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+	windowsAbsolutePathPattern = regexp.MustCompile(`^[A-Za-z]:\\[^\x00\r\n]+$`)
 )
 
 var configurationFields = map[string]map[string]bool{
@@ -183,6 +186,25 @@ func (p DeploymentPlan) Validate() error {
 	if len(missing) > 0 {
 		sort.Strings(missing)
 		return fmt.Errorf("missing required configuration fields: %s", strings.Join(missing, ", "))
+	}
+	if p.Target.Kind == "local-compose" {
+		if !dockerProjectPattern.MatchString(p.Configuration["projectName"]) {
+			return errors.New("local-compose projectName must use lowercase letters, numbers, underscore, or hyphen")
+		}
+		dataDirectory := p.Configuration["dataDirectory"]
+		if !strings.HasPrefix(dataDirectory, "/") && !windowsAbsolutePathPattern.MatchString(dataDirectory) {
+			return errors.New("local-compose dataDirectory must be an absolute Windows or POSIX path")
+		}
+		for _, component := range strings.FieldsFunc(strings.ReplaceAll(dataDirectory, "\\", "/"), func(value rune) bool { return value == '/' }) {
+			if component == ".." {
+				return errors.New("local-compose dataDirectory must not contain parent traversal")
+			}
+		}
+		listen := strings.TrimPrefix(p.Configuration["listenAddress"], "127.0.0.1:")
+		port, err := strconv.Atoi(listen)
+		if err != nil || listen == p.Configuration["listenAddress"] || port < 1024 || port > 65535 {
+			return errors.New("local-compose listenAddress must use 127.0.0.1 and a port from 1024 through 65535")
+		}
 	}
 	return nil
 }

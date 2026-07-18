@@ -6,6 +6,25 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.10] - 2026-07-17
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- Supplied a process-only interpolation sentinel for the disabled PostgreSQL
+  profile when starting WSL and remote Linux SQLite evaluations. Ranch Hand does
+  not create or persist a database password for a service it does not start.
+- Explicitly passed Ranch Hand's generated `.env` to Docker Compose. Absolute
+  Compose file paths no longer cause interpolation to search the launch user's
+  working directory instead of the owned installation directory.
+- Made ownership-checked recovery compatible with rc.9 and earlier failed
+  installs whose environment lacks `POSTGRES_PASSWORD`. The process-only value
+  is used solely to parse Compose; marker, file-hash, container,
+  volume, and label checks remain required before deletion.
+- Included bounded Compose output when owned failed-install cleanup fails.
+
 ## [0.1.0-rc.9] - 2026-07-17
 
 **Classification: Public Preview.** Publicly downloadable and intended for

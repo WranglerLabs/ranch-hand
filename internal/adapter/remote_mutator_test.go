@@ -74,9 +74,15 @@ func (h *fakeRemoteHost) Run(_ context.Context, command string, stdin []byte) (s
 		}
 		return "", errors.New("unknown transfer")
 	case strings.Contains(command, "docker compose") && strings.HasSuffix(command, "up --detach --pull always server"):
+		if !strings.HasPrefix(command, "POSTGRES_PASSWORD=ranch-hand-postgres-profile-disabled ") || !strings.Contains(command, " --env-file ") {
+			return "required variable POSTGRES_PASSWORD is missing a value", errors.New("compose interpolation failed")
+		}
 		h.resources = true
 		return "started", nil
 	case strings.Contains(command, "docker compose") && strings.HasSuffix(command, "down --volumes --remove-orphans"):
+		if !strings.HasPrefix(command, "POSTGRES_PASSWORD=ranch-hand-postgres-profile-disabled ") {
+			return "required variable POSTGRES_PASSWORD is missing a value", errors.New("compose interpolation failed")
+		}
 		h.resources = false
 		h.composeDown = true
 		return "removed", nil
@@ -176,7 +182,8 @@ func TestRemoteEvaluationInstallTransfersVerifiedBundleAndChecksIdentity(t *test
 	if !host.directory || !host.resources || len(host.files) != 4 {
 		t.Fatal("remote install did not create its dedicated files and Docker resources")
 	}
-	if strings.Contains(string(host.files[".env"]), credentials.SSHPassword) || !strings.Contains(string(host.files[".env"]), "BIND_ADDRESS=127.0.0.1") {
+	environment := string(host.files[".env"])
+	if strings.Contains(environment, credentials.SSHPassword) || !strings.Contains(environment, "BIND_ADDRESS=127.0.0.1") || strings.Contains(environment, "POSTGRES_PASSWORD=") {
 		t.Fatal("remote evaluation environment exposed a secret or failed to bind loopback")
 	}
 	if err := adapter.Verify(context.Background(), candidate, credentials); err != nil {
@@ -206,6 +213,35 @@ func TestRemoteRecoveryRemovesOnlyMarkerOwnedResources(t *testing.T) {
 	}
 	if !host.composeDown || host.directory || host.resources {
 		t.Fatal("owned failed-install remote project was not removed")
+	}
+}
+
+func TestRemoteRecoveryRemovesPreviewInstallWhoseEnvironmentLacksPostgresPassword(t *testing.T) {
+	host := newFakeRemoteHost()
+	adapter := newRemoteLinuxCompose(func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error) { return host, nil })
+	candidate := remoteEvaluationPlan()
+	credentials := Credentials{SSHPassword: "runtime-only"}
+	if err := adapter.Apply(context.Background(), lifecycle.Install, candidate, "", stagedRemoteBundle(t), lifecycle.OperationBackups{}, credentials); err != nil {
+		t.Fatal(err)
+	}
+
+	// rc.9 and earlier wrote this environment. Its marker legitimately hashes
+	// the old contents, but Compose cannot interpolate the profiled PostgreSQL
+	// service unless recovery supplies the missing value independently.
+	host.files[".env"] = []byte("BIND_ADDRESS=127.0.0.1\nPORT=8080\nDEMO_MODE=true\nAUTH_PROVIDERS=github\nENABLE_SCHEDULER=true\nAPP_VERSION=v1.2.3\n")
+	marker := host.marker()
+	marker.EnvironmentSHA256 = bytesSHA256(host.files[".env"])
+	encoded, err := json.MarshalIndent(marker, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.files[remoteMarkerName] = append(encoded, '\n')
+
+	if err := adapter.Recover(context.Background(), lifecycle.Install, candidate, "", lifecycle.OperationBackups{}, credentials); err != nil {
+		t.Fatal(err)
+	}
+	if !host.composeDown || host.directory || host.resources {
+		t.Fatal("preview environment without POSTGRES_PASSWORD was not recovered")
 	}
 }
 

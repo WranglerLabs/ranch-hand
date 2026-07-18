@@ -6,6 +6,27 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.22] - 2026-07-18
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- Ranch Hand now selects and verifies RepoWrangler v1.0.13. Fresh real-mode WSL
+  and Remote Linux deployments wait for setup state before mounting protected
+  pages and route directly into the secure provider onboarding wizard instead
+  of displaying a sign-in screen with no configured method.
+- The v1.0.13 offline archive trust record pins its registry-index,
+  platform-manifest, image-config, archive SHA-256, and exact byte size.
+
+### Verification
+
+- Full Go test suite passes.
+- `go vet ./...` passes.
+- React TypeScript checking and production build pass.
+- Windows AMD64 executable compilation passes.
+
 ## [0.1.0-rc.21] - 2026-07-18
 
 **Classification: Public Preview.** Publicly downloadable and intended for

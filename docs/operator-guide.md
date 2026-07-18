@@ -12,7 +12,7 @@ its [manual deployment recipes](https://github.com/WranglerLabs/repo-wrangler/tr
 
 ## Current availability
 
-There is no signed GA Ranch Hand installer yet. `v0.1.0-rc.19` is an unsigned
+There is no signed GA Ranch Hand installer yet. `v0.1.0-rc.20` is an unsigned
 Public Preview published as a stable prerelease download. It is intended for
 evaluation and feedback, not production support.
 
@@ -23,13 +23,13 @@ organizational security policy.
 ## Download and verify the Public Preview
 
 1. Open the public [Ranch Hand for Windows guide](https://wranglerlabs.org/ranch-hand)
-   and select **Download Ranch Hand v0.1.0-rc.19 for Windows (64-bit)**. A GitHub
+   and select **Download Ranch Hand v0.1.0-rc.20 for Windows (64-bit)**. A GitHub
    account is not required.
 2. In PowerShell, verify the executable before running it:
 
    ```powershell
-   Get-FileHash .\ranch-hand-v0.1.0-rc.19-windows-amd64.exe -Algorithm SHA256
-   Get-AuthenticodeSignature .\ranch-hand-v0.1.0-rc.19-windows-amd64.exe
+   Get-FileHash .\ranch-hand-v0.1.0-rc.20-windows-amd64.exe -Algorithm SHA256
+   Get-AuthenticodeSignature .\ranch-hand-v0.1.0-rc.20-windows-amd64.exe
    ```
 
    Compare the result with the `.sha256` file published beside the executable
@@ -40,7 +40,7 @@ organizational security policy.
 3. For optional GitHub provenance verification, install GitHub CLI and run:
 
    ```powershell
-   gh attestation verify .\ranch-hand-v0.1.0-rc.19-windows-amd64.exe `
+   gh attestation verify .\ranch-hand-v0.1.0-rc.20-windows-amd64.exe `
      --repo WranglerLabs/ranch-hand
    ```
 
@@ -49,7 +49,7 @@ Windows code-signing certificate.
 
 ## Launch Ranch Hand
 
-Double-click `ranch-hand-v0.1.0-rc.19-windows-amd64.exe`, or start it from
+Double-click `ranch-hand-v0.1.0-rc.20-windows-amd64.exe`, or start it from
 PowerShell. Ranch Hand binds a random port on `127.0.0.1`, opens the interface in
 your default browser, and protects that browser session with a random one-time
 launch token.
@@ -67,7 +67,7 @@ existing environment.
 
 | Target | What you need | Current boundary |
 |---|---|---|
-| Local Docker Compose — WSL | An installed WSL2 Ubuntu/Debian distribution | If Engine or Compose is missing, Ranch Hand offers to install it inside WSL, start Docker, grant the WSL user access, and rerun preflight. **Demo mode** is an explicit toggle and defaults off. Off generates protected local secrets and opens real first-run provider setup; on uses mock data. Ranch Hand verifies and loads the public v1.0.10 image archive with pulls disabled. Docker Desktop, SSH, a WSL IP, filesystem path, GitHub account, token, and registry login are not required. |
+| Local Docker Compose — WSL | An installed WSL2 Ubuntu/Debian distribution | If Engine or Compose is missing, Ranch Hand offers to install it inside WSL, start Docker, grant the WSL user access, and rerun preflight. **Demo mode** is an explicit toggle and defaults off. Off generates protected local secrets and opens real first-run provider setup; on uses mock data. Ranch Hand verifies and loads the public v1.0.12 image archive with pulls disabled. Docker Desktop, SSH, a WSL IP, filesystem path, GitHub account, token, and registry login are not required. |
 | Local Docker Desktop | Windows Package Manager, or an already installed Docker Desktop running Linux containers | If unavailable, Ranch Hand offers to install Docker Desktop through `winget`; administrator approval, first-run terms, and startup may still be required. Windows Docker API, loopback-only demo/SQLite deployment. Full backup, update, restore, rollback, repair, recovery, and rollback-pool retention are available. |
 | Azure Container Apps | An Azure subscription, permission to create a dedicated resource group and ACA resources, and a temporary ARM access token | New resource group, demo mode, SQLite on Azure Files, and Azure-managed HTTPS. Resources can incur Azure charges. Existing groups, PostgreSQL, production credentials, custom domains, and update are not enabled. |
 | Cloudflare | Account ID, unused Worker and D1 names, a workers.dev subdomain, and a scoped API token with account read, Workers Scripts write, and D1 write access | New Worker and D1 database in demo mode with Cloudflare-managed workers.dev HTTPS. Existing resources, custom domains, production secrets, backup, and update are not enabled. |
@@ -133,9 +133,9 @@ Every guided target has a source-controlled path that works without Ranch Hand:
 
 | Ranch Hand target | Manual source recipe |
 |---|---|
-| Local or remote Docker Compose | [`deploy/docker`](https://github.com/WranglerLabs/repo-wrangler/tree/main/deploy/docker) and the v1.0.10 Compose release bundle |
-| Azure Container Apps | [`deploy/azure-container-apps`](https://github.com/WranglerLabs/repo-wrangler/tree/main/deploy/azure-container-apps) and the v1.0.10 compiled ACA bundle |
-| Cloudflare Worker + D1 | [`deploy/cloudflare`](https://github.com/WranglerLabs/repo-wrangler/tree/main/deploy/cloudflare) and the v1.0.10 built Cloudflare bundle |
+| Local or remote Docker Compose | [`deploy/docker`](https://github.com/WranglerLabs/repo-wrangler/tree/main/deploy/docker) and the v1.0.12 Compose release bundle |
+| Azure Container Apps | [`deploy/azure-container-apps`](https://github.com/WranglerLabs/repo-wrangler/tree/main/deploy/azure-container-apps) and the v1.0.12 compiled ACA bundle |
+| Cloudflare Worker + D1 | [`deploy/cloudflare`](https://github.com/WranglerLabs/repo-wrangler/tree/main/deploy/cloudflare) and the v1.0.12 built Cloudflare bundle |
 | Kubernetes or another topology not in Ranch Hand | The remaining [`deploy`](https://github.com/WranglerLabs/repo-wrangler/tree/main/deploy) recipes and user-owned CI/CD |
 
 The manual path may build from a checked-out immutable tag or consume published
@@ -160,8 +160,11 @@ release. Ranch Hand will not accept an arbitrary version or filesystem backup
 path. Every destructive cleanup rechecks Ranch Hand ownership labels and stops on
 missing or ambiguous evidence.
 
-Uninstall is not implemented. To avoid losing data, do not manually delete a
-Ranch Hand-managed container, volume, backup directory, or catalog record.
+Automated uninstall is not implemented. If an evaluation deployment must be
+removed before that lifecycle ships, follow the target-specific
+[manual removal runbook](uninstall.md). It separates retain-data and permanent
+deletion paths and requires exact ownership checks. Never delete Ranch Hand's
+local catalog merely to bypass an active installation record.
 
 ## Local state and diagnostics
 
@@ -187,9 +190,10 @@ Ranch Hand never installs Caddy or another universal proxy.
 - Azure Container Apps and Cloudflare evaluation deployments use their native
   managed HTTPS endpoints.
 - Local Docker remains loopback-only.
-- Remote Linux Compose remains loopback-only on the Linux host. Publishing it is
-  outside the evaluation adapter and requires an operator-selected trusted HTTPS
-  ingress and authentication design.
+- Remote Linux private-LAN evaluation publishes port 8080 only when the plan
+  contains an explicit private IPv4 address. Public exposure remains outside the
+  evaluation adapter and requires an operator-selected trusted HTTPS ingress and
+  authentication design.
 
 ## Getting help
 

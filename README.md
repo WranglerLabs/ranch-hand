@@ -2,7 +2,7 @@
 
 Ranch Hand is the standalone, Windows-first lifecycle manager for [RepoWrangler](https://github.com/WranglerLabs/repo-wrangler). It is for operators who want to install and manage RepoWrangler without cloning or forking its source repository. Contributors and advanced operators can still use RepoWrangler's documented deployment recipes directly.
 
-> **Status: Public Preview.** [`v0.1.0-rc.19`](docs/releases/v0.1.0-rc.19.md)
+> **Status: Public Preview.** [`v0.1.0-rc.20`](docs/releases/v0.1.0-rc.20.md)
 > is the primary recommended Windows deployment path for RepoWrangler. It is
 > publicly downloadable and functional, but it is unsigned and not production
 > supported or generally available. See the complete [GA readiness
@@ -77,8 +77,8 @@ and credential-encryption secrets, and opens the first-run provider setup flow.
 On intentionally selects the mock-data evaluation profile. Ranch Hand never
 stores the generated secrets in the exported plan, catalog, or diagnostics.
 
-For RepoWrangler v1.0.10, Ranch Hand downloads a 286,575,554-byte public image
-archive from its own immutable release, verifies the archive's embedded byte
+For RepoWrangler v1.0.12, Ranch Hand downloads the public image archive from
+the immutable RepoWrangler release, verifies the archive's byte
 count and SHA-256 trust record, caches it under the current Windows user, and
 streams it directly into the selected WSL Docker Engine. Compose uses only that
 loaded image with `pull_policy: never`; the WSL install does not contact GHCR
@@ -86,6 +86,10 @@ and does not require a GitHub account, registry login, or token.
 
 This Preview supports a new WSL evaluation install. WSL backup, update, restore,
 rollback, repair, and uninstall remain open lifecycle work.
+
+Until automated uninstall ships, use the ownership-checked
+[manual removal runbook](docs/uninstall.md) for target-specific retain-data and
+permanent-deletion procedures.
 
 If an install is interrupted after Ranch Hand creates its dedicated directory,
 the next preflight recognizes the matching durable journal and offers

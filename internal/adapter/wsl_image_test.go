@@ -7,8 +7,23 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 )
+
+func TestCompanionImageTrustRecordsSupportCurrentAndPriorRelease(t *testing.T) {
+	current, err := companionForImage(repoWranglerV1012Companion.image)
+	if err != nil || current.runtimeImage != "repo-wrangler-ranch-hand:v1.0.12" || current.imageID != "sha256:0882c997a463d41b3cd551208de805bd3fdfd5cb8cf3ea3a11ef96a088327215" {
+		t.Fatalf("current RepoWrangler companion trust record is invalid: %#v %v", current, err)
+	}
+	prior, err := companionForImage(repoWranglerV1010Companion.image)
+	if err != nil || prior.runtimeImage != repoWranglerV1010Companion.runtimeImage {
+		t.Fatalf("prior RepoWrangler companion trust record was not retained: %#v %v", prior, err)
+	}
+	if _, err := companionForImage("ghcr.io/wranglerlabs/repo-wrangler-server@sha256:" + strings.Repeat("f", 64)); err == nil {
+		t.Fatal("unknown RepoWrangler image unexpectedly received a companion trust record")
+	}
+}
 
 func TestCompanionImageDownloadVerifiesAndReusesCache(t *testing.T) {
 	contents := []byte("verified image archive")

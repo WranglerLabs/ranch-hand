@@ -6,6 +6,11 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.20] - 2026-07-18
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
 ### Fixed
 
 - Remote Linux plans now default to direct private-LAN access, bind the managed
@@ -18,6 +23,24 @@ generally available or production-supported releases.
 - WSL and Remote Linux installs now verify the SPA shell and its referenced
   JavaScript asset in addition to health and release identity, preventing a
   missing web bundle from being reported as a successful installation.
+
+### Changed
+
+- Ranch Hand now selects RepoWrangler v1.0.12, whose web startup recovery
+  evicts the failed cached asset set that could leave an otherwise healthy WSL
+  deployment displaying a black page.
+
+### Documentation
+
+- Added ownership-checked manual removal procedures for Docker Desktop, WSL,
+  Remote Linux, Azure Container Apps, Cloudflare Worker/D1, and the portable
+  Ranch Hand executable, including retain-data and permanent-delete paths.
+
+### Verification
+
+- Full Go test suite passes.
+- `go vet ./...` passes.
+- React TypeScript checking and production build pass.
 
 ## [0.1.0-rc.19] - 2026-07-18
 

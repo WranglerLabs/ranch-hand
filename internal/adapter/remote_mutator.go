@@ -318,7 +318,8 @@ func readRemoteMarker(ctx context.Context, host remoteHost, candidate plan.Deplo
 }
 
 func validLoadedRuntimeImage(image, runtimeImage string) bool {
-	return image == repoWranglerV1010Companion.image && runtimeImage == repoWranglerV1010Companion.runtimeImage
+	companion, err := companionForImage(image)
+	return err == nil && runtimeImage == companion.runtimeImage
 }
 
 func remotePinnedImage(value string) bool {
@@ -354,8 +355,9 @@ func verifyRemoteResources(ctx context.Context, host remoteHost, marker remoteIn
 		return errors.New("remote container does not use the verified immutable image")
 	}
 	if marker.RuntimeImage != "" {
+		companion, companionErr := companionForImage(marker.Image)
 		imageID, imageErr := host.Run(ctx, "docker container inspect --format '{{.Image}}' "+shellQuote(marker.ContainerName), nil)
-		if imageErr != nil || imageID != repoWranglerV1010Companion.imageID {
+		if companionErr != nil || imageErr != nil || imageID != companion.imageID {
 			return errors.New("remote container runtime image ID does not match the verified immutable image")
 		}
 	}

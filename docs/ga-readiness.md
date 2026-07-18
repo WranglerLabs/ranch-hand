@@ -1,6 +1,6 @@
 # Ranch Hand GA readiness
 
-Ranch Hand `v0.1.0-rc.19` is a **Public Preview**. It is the primary recommended
+Ranch Hand `v0.1.0-rc.20` is a **Public Preview**. It is the primary recommended
 way for a Windows operator to begin a RepoWrangler deployment without cloning
 source. The manual RepoWrangler recipes remain supported for contributors,
 custom automation, production topologies not yet covered by Ranch Hand, and
@@ -18,7 +18,7 @@ Ranch Hand can be called generally available.
 | Gate | Required GA outcome | Preview status |
 |---|---|---|
 | Trusted Windows distribution | Authenticode-signed and timestamped executable from the approved SignPath policy; publisher, signature, checksum, SBOM, provenance, revocation, and stable-channel checks pass | Open; preview executable is intentionally unsigned |
-| RepoWrangler compatibility | Ranch Hand installs and manages the latest supported RepoWrangler patch through its immutable manifest and rejects unsupported, floating, downgraded, or tampered inputs | Partial; v1.0.10 discovery and verification pass |
+| RepoWrangler compatibility | Ranch Hand installs and manages the latest supported RepoWrangler patch through its immutable manifest and rejects unsupported, floating, downgraded, or tampered inputs | Partial; v1.0.12 discovery and verification pass |
 | Production configuration | Guided production credentials, authentication, database, storage, domain/HTTPS, and target settings are supported without editing generated files | Partial; local WSL now defaults to real first-run provider setup with generated local secrets, while other production target settings remain open |
 | Azure authentication and lifecycle | Integrated Azure sign-in replaces pasted ARM tokens; ACA supports PostgreSQL, supported existing/dedicated resource choices, managed domains, backup, update, restore, rollback, repair, and uninstall | Open |
 | Cloudflare lifecycle | Production secrets and domains plus ownership-safe backup, update, restore, rollback, repair, and uninstall are implemented and tested | Open |

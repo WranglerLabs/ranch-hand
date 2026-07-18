@@ -32,7 +32,19 @@ var repoWranglerV1010Companion = companionImage{
 	size:         286575554,
 }
 
+var repoWranglerV1012Companion = companionImage{
+	image:        "ghcr.io/wranglerlabs/repo-wrangler-server@sha256:e4006a552ec2ece536bc737f6595bdbf8dc32d99f29c888fe9d06d5e09acffd7",
+	runtimeImage: "repo-wrangler-ranch-hand:v1.0.12",
+	imageID:      "sha256:0882c997a463d41b3cd551208de805bd3fdfd5cb8cf3ea3a11ef96a088327215",
+	url:          "https://github.com/WranglerLabs/repo-wrangler/releases/download/v1.0.12/repo-wrangler-v1.0.12-linux-amd64-image.tar.gz",
+	sha256:       "213773b172305e9ea6c8c700034b02f991632973908ac1524bb84a23d4ac870c",
+	size:         280769404,
+}
+
 func companionForImage(image string) (companionImage, error) {
+	if image == repoWranglerV1012Companion.image {
+		return repoWranglerV1012Companion, nil
+	}
 	if image == repoWranglerV1010Companion.image {
 		return repoWranglerV1010Companion, nil
 	}

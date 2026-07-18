@@ -150,6 +150,7 @@ function App() {
   const [stagedBundle, setStagedBundle] = useState<StagedBundle | null>(null);
   const [installConfirmed, setInstallConfirmed] = useState(false);
   const [installing, setInstalling] = useState(false);
+  const [wslInstallMessage, setWSLInstallMessage] = useState("");
   const [operationResult, setOperationResult] = useState<OperationResult | null>(null);
   const [operationKind, setOperationKind] = useState<"install" | "wsl-install" | "backup" | "update" | "restore" | "rollback" | "repair" | "azure-install" | "cloudflare-install" | "remote-install" | null>(null);
   const [localAction, setLocalAction] = useState<"install" | "update">("install");
@@ -212,6 +213,13 @@ function App() {
     }
   }
 
+  useEffect(() => {
+    if (!installing) return;
+    void refreshActiveOperations();
+    const timer = window.setInterval(() => { void refreshActiveOperations(); }, 1000);
+    return () => window.clearInterval(timer);
+  }, [installing]);
+
   async function recoverActiveOperation(operation: ActiveOperation) {
     setRecoveringDeployment(operation.deploymentId);
     setRecoveryMessage("");
@@ -231,7 +239,7 @@ function App() {
   }
 
   function recoveryCredentialsReady(operation: ActiveOperation, values: Record<string, string>) {
-    if (operation.phase === "prepared" || operation.phase === "backup-complete" || operation.target === "local-compose") return true;
+    if (operation.phase === "prepared" || operation.phase === "backup-complete" || operation.target === "local-compose" || operation.target === "local-wsl-compose") return true;
     if (operation.target === "azure-container-apps") return Boolean(values.azureAccessToken?.trim());
     if (operation.target === "cloudflare") return Boolean(values.cloudflareApiToken?.trim());
     if (operation.target === "remote-linux-compose") return Boolean(values.sshPrivateKey?.trim() || values.sshPassword?.trim());
@@ -432,8 +440,17 @@ function App() {
   }
 
   async function installWSL() {
-    if (!planResult || !installConfirmed) return;
+    if (!planResult) {
+      setWSLInstallMessage("Create and preflight the WSL deployment plan before installing.");
+      return;
+    }
+    if (!installConfirmed) {
+      setWSLInstallMessage("Select the confirmation checkbox before starting the WSL installation.");
+      return;
+    }
     setInstalling(true);
+    setOperationKind("wsl-install");
+    setWSLInstallMessage("Submitting the WSL installation. Docker may need several minutes to pull and start the verified image.");
     setPlanError("");
     setOperationResult(null);
     try {
@@ -441,10 +458,13 @@ function App() {
         method: "POST",
         body: JSON.stringify({ kind: "install", plan: planResult, credentials: {} }),
       }));
-      setOperationKind("wsl-install");
+      setWSLInstallMessage("");
     } catch (reason) {
-      setPlanError(reason instanceof Error ? reason.message : "Local WSL Compose installation failed");
+      const message = reason instanceof Error ? reason.message : "Local WSL Compose installation failed";
+      setPlanError(message);
+      setWSLInstallMessage(message);
     } finally {
+      await refreshActiveOperations();
       setInstalling(false);
     }
   }
@@ -619,7 +639,7 @@ function App() {
         <form onSubmit={verifyRelease}>
           <label>Release choice<select value={releaseChoice} onChange={(event) => { setReleaseChoice(event.target.value as "stable" | "prerelease" | "specific"); setArtifact(null); setPlanResult(null); }}><option value="stable">Latest stable (recommended)</option><option value="prerelease">Latest prerelease</option><option value="specific">Specific version (advanced)</option></select></label>
           <label>RepoWrangler version<input required readOnly={releaseChoice !== "specific"} pattern="v[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9.-]+)?" placeholder={releaseLoading ? "Finding the latest compatible release…" : "v1.0.10"} value={version} onChange={(event) => setVersion(event.target.value)} /></label>
-          <label>Deployment target<select value={target} onChange={(event) => { const next = event.target.value; setTarget(next); setArtifact(null); setPlanResult(null); setConfiguration(targetDefaults[next] || {}); setRuntimeCredentials({}); setTargetReport(null); setStagedBundle(null); setInstallConfirmed(false); setOperationResult(null); setOperationKind(null); setOperationAzureToken(""); setOperationCloudflareToken(""); setOperationSSHCredentials({}); }}><option value="local-wsl-compose">Local Docker Compose — WSL</option><option value="local-compose">Local Docker Desktop</option><option value="remote-linux-compose">Remote Linux Docker Compose</option><option value="cloudflare">Cloudflare</option><option value="azure-container-apps">Azure Container Apps</option></select></label>
+          <label>Deployment target<select value={target} onChange={(event) => { const next = event.target.value; setTarget(next); setArtifact(null); setPlanResult(null); setConfiguration(targetDefaults[next] || {}); setRuntimeCredentials({}); setTargetReport(null); setStagedBundle(null); setInstallConfirmed(false); setWSLInstallMessage(""); setOperationResult(null); setOperationKind(null); setOperationAzureToken(""); setOperationCloudflareToken(""); setOperationSSHCredentials({}); }}><option value="local-wsl-compose">Local Docker Compose — WSL</option><option value="local-compose">Local Docker Desktop</option><option value="remote-linux-compose">Remote Linux Docker Compose</option><option value="cloudflare">Cloudflare</option><option value="azure-container-apps">Azure Container Apps</option></select></label>
           <button type="submit" disabled={verifying || releaseLoading || !version || !token}>{releaseLoading ? "Finding release…" : verifying ? "Verifying and caching…" : "Verify and cache release"}</button>
         </form>
         {releaseError && <div className="inline-result error" role="alert"><strong>Release rejected</strong><p>{releaseError}</p></div>}
@@ -655,7 +675,7 @@ function App() {
           <button type="submit" disabled={targetRunning}>{targetRunning ? "Checking target…" : "Run live target preflight"}</button>
         </form>}
         {targetReport && <div className={`inline-result ${targetReport.ready ? "success" : "error"}`}><strong>{targetReport.ready ? "Target is ready" : "Target preflight blocked"}</strong><ul>{targetReport.checks.map((check) => <li key={check.name}>{check.ok ? "✓" : "✕"} {check.message}</li>)}</ul></div>}
-        {target === "local-wsl-compose" && targetReport?.ready && stagedBundle && !operationResult && <div className="inline-result install-panel"><strong>Install with Docker Compose inside WSL</strong><p>Ranch Hand will transfer the verified Compose bundle into {configuration.distribution}, use the Docker-managed volume <code>{configuration.projectName}-data</code>, and expose RepoWrangler at <code>http://127.0.0.1:8080</code>. Docker Desktop, SSH, a WSL IP, and a filesystem path are not used.</p><label className="confirmation"><input type="checkbox" checked={installConfirmed} onChange={(event) => setInstallConfirmed(event.target.checked)} /> I understand this creates a local evaluation project inside the selected WSL distribution.</label><button type="button" disabled={!installConfirmed || installing} onClick={installWSL}>{installing ? "Running Docker Compose in WSL…" : "Install in WSL"}</button></div>}
+        {target === "local-wsl-compose" && targetReport?.ready && stagedBundle && !operationResult && <div className="inline-result install-panel"><strong>Install with Docker Compose inside WSL</strong><p>Ranch Hand will transfer the verified Compose bundle into {configuration.distribution}, use the Docker-managed volume <code>{configuration.projectName}-data</code>, and expose RepoWrangler at <code>http://127.0.0.1:8080</code>. Docker Desktop, SSH, a WSL IP, and a filesystem path are not used.</p><label className="confirmation"><input type="checkbox" checked={installConfirmed} onChange={(event) => { setInstallConfirmed(event.target.checked); setWSLInstallMessage(""); }} /> I understand this creates a local evaluation project inside the selected WSL distribution.</label><button type="button" disabled={installing} onClick={installWSL}>{installing ? "Running Docker Compose in WSL…" : "Install in WSL"}</button>{wslInstallMessage && <p className={installing ? "operation-progress" : "operation-warning"} role={installing ? "status" : "alert"} aria-live="polite">{wslInstallMessage}</p>}{installing && <p className="operation-progress" role="status" aria-live="polite">{(() => { const operation = activeOperations.find((item) => item.target === "local-wsl-compose"); return operation ? `Current lifecycle phase: ${operation.phase}. Ranch Hand is still working; keep this window open.` : "Preparing the durable operation journal…"; })()}</p>}</div>}
         {target === "local-compose" && targetReport?.ready && stagedBundle && !operationResult && <div className="inline-result install-panel"><strong>Apply Docker Desktop evaluation plan</strong><label>Operation<select value={localAction} onChange={(event) => { setLocalAction(event.target.value as "install" | "update"); setInstallConfirmed(false); }}><option value="install">New installation</option><option value="update">Backup-first update</option></select></label>{localAction === "install" ? <><p>This uses Docker Desktop's Windows-exposed Docker Engine API, installs RepoWrangler in demo mode with SQLite, and binds only to 127.0.0.1.</p><label className="confirmation"><input type="checkbox" checked={installConfirmed} onChange={(event) => setInstallConfirmed(event.target.checked)} /> I understand this target requires Docker Desktop or an equivalent Windows-exposed Docker Engine.</label><button type="button" disabled={!installConfirmed || installing || inventoryLoading || currentInstallation !== null} onClick={installLocal}>{installing ? "Installing and verifying…" : inventoryLoading ? "Checking installation inventory…" : "Install with Docker Desktop"}</button></> : <><p>Ranch Hand will verify and back up the current owned container, seed a new volume, preserve the old container and volume for rollback, activate the immutable release selected above, and recover automatically if readiness fails.</p><label>Recorded currently installed immutable version<input readOnly value={fromVersion} placeholder={inventoryLoading ? "Loading installation record…" : "No active installation record"} /></label><label className="confirmation"><input type="checkbox" checked={installConfirmed} onChange={(event) => setInstallConfirmed(event.target.checked)} /> I understand the running local instance will have brief downtime during backup and activation.</label><button type="button" disabled={!installConfirmed || !fromVersion || fromVersion === planResult?.release.version || installing} onClick={updateLocal}>{installing ? "Backing up and updating…" : "Back up and update local evaluation"}</button></>}</div>}
         {target === "local-compose" && targetReport?.ready && stagedBundle && currentInstallation && !operationResult && <div className="inline-result install-panel"><strong>Restore, roll back, or repair recorded local data</strong><p>Recorded installation: {currentInstallation.version}. Select a verified backup for the release bound to this plan ({planResult?.release.version}). Ranch Hand first creates a fresh safety backup, writes only to a new owned volume, preserves the original container, and recovers it automatically if verification fails.</p>{inventoryLoading ? <p>Loading lifecycle inventory…</p> : <><label>Recorded backup<select value={selectedBackupId} onChange={(event) => { setSelectedBackupId(event.target.value); setRecoveryConfirmed(false); }}><option value="">Select a backup</option>{backups.filter((backup) => backup.version === planResult?.release.version).map((backup) => <option key={backup.backupId} value={backup.backupId}>{backup.version} — {new Date(backup.createdAt).toLocaleString()} — {backup.backupId.slice(0, 12)}</option>)}</select></label>{backups.every((backup) => backup.version !== planResult?.release.version) && <p>No recorded backup matches this verified release. Verify the immutable release represented by the backup you want to use, or repair the currently recorded release from a fresh safety backup.</p>}<label className="confirmation"><input type="checkbox" checked={recoveryConfirmed} onChange={(event) => setRecoveryConfirmed(event.target.checked)} /> I understand the current instance will have brief downtime and a new safety backup will be created first.</label><div className="button-row"><button type="button" disabled={!selectedBackupId || !recoveryConfirmed || installing} onClick={() => restoreOrRollbackLocal(planResult?.release.version === currentInstallation.version ? "restore" : "rollback")}>{installing ? "Protecting current state and applying backup…" : planResult?.release.version === currentInstallation.version ? "Back up current state and restore" : "Back up current state and roll back"}</button><button type="button" className="secondary" disabled={!recoveryConfirmed || installing || planResult?.release.version !== currentInstallation.version} onClick={repairLocal}>{installing ? "Repairing…" : "Back up and repair current release"}</button></div></>}</div>}
         {target === "local-compose" && currentInstallation && rollbackPool.length > 0 && !operationResult && <div className="inline-result install-panel"><strong>Rollback-pool retention</strong><p>{rollbackPool.length} stopped, ownership-verified rollback {rollbackPool.length === 1 ? "environment is" : "environments are"} consuming Docker container and volume storage. Verified backup archives and records are retained when these Docker resources are pruned.</p><label>Keep newest rollback environments<select value={rollbackKeepLatest} onChange={(event) => { setRollbackKeepLatest(Number(event.target.value)); setRollbackPruneConfirmed(false); }}>{Array.from({ length: Math.min(10, rollbackPool.length) + 1 }, (_, value) => <option key={value} value={value}>{value}</option>)}</select></label><label className="confirmation"><input type="checkbox" checked={rollbackPruneConfirmed} onChange={(event) => setRollbackPruneConfirmed(event.target.checked)} /> I understand Ranch Hand will permanently remove {Math.max(0, rollbackPool.length - rollbackKeepLatest)} older stopped rollback container and data volume {Math.max(0, rollbackPool.length - rollbackKeepLatest) === 1 ? "pair" : "pairs"} after re-verifying ownership.</label><button type="button" className="secondary" disabled={!rollbackPruneConfirmed || rollbackPruning || rollbackKeepLatest >= rollbackPool.length} onClick={pruneRollbackPool}>{rollbackPruning ? "Re-verifying and pruning…" : "Prune older rollback environments"}</button></div>}

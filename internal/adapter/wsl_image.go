@@ -36,7 +36,7 @@ func companionForImage(image string) (companionImage, error) {
 	if image == repoWranglerV1010Companion.image {
 		return repoWranglerV1010Companion, nil
 	}
-	return companionImage{}, fmt.Errorf("RepoWrangler release image %s has no verified public WSL image archive", image)
+	return companionImage{}, fmt.Errorf("RepoWrangler release image %s has no verified public image archive", image)
 }
 
 func cacheCompanionImage(ctx context.Context, companion companionImage, client *http.Client, root string) (string, error) {
@@ -62,11 +62,11 @@ func cacheCompanionImage(ctx context.Context, companion companionImage, client *
 	request.Header.Set("Accept", "application/octet-stream")
 	response, err := client.Do(request)
 	if err != nil {
-		return "", fmt.Errorf("download verified public WSL image archive: %w", err)
+		return "", fmt.Errorf("download verified public image archive: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download verified public WSL image archive: release host returned HTTP %d", response.StatusCode)
+		return "", fmt.Errorf("download verified public image archive: release host returned HTTP %d", response.StatusCode)
 	}
 	temporary, err := os.CreateTemp(directory, ".image-*.partial")
 	if err != nil {
@@ -83,13 +83,13 @@ func cacheCompanionImage(ctx context.Context, companion companionImage, client *
 	hash := sha256.New()
 	written, copyErr := io.Copy(io.MultiWriter(temporary, hash), io.LimitReader(response.Body, companion.size+1))
 	if copyErr != nil {
-		return "", fmt.Errorf("cache verified public WSL image archive: %w", copyErr)
+		return "", fmt.Errorf("cache verified public image archive: %w", copyErr)
 	}
 	if written != companion.size {
-		return "", fmt.Errorf("WSL image archive size mismatch: expected %d bytes, received %d", companion.size, written)
+		return "", fmt.Errorf("image archive size mismatch: expected %d bytes, received %d", companion.size, written)
 	}
 	if !strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), companion.sha256) {
-		return "", errors.New("WSL image archive SHA-256 mismatch")
+		return "", errors.New("image archive SHA-256 mismatch")
 	}
 	if err := temporary.Sync(); err != nil {
 		return "", err
@@ -101,7 +101,7 @@ func cacheCompanionImage(ctx context.Context, companion companionImage, client *
 		if matchesFile(destination, companion.sha256, companion.size) {
 			return destination, nil
 		}
-		return "", fmt.Errorf("commit verified WSL image archive: %w", err)
+		return "", fmt.Errorf("commit verified image archive: %w", err)
 	}
 	committed = true
 	return destination, nil

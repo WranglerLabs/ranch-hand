@@ -2,9 +2,13 @@ package adapter
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +29,7 @@ func remoteEvaluationPlan() plan.DeploymentPlan {
 func stagedRemoteBundle(t *testing.T) bundle.StagedBundle {
 	t.Helper()
 	directory := t.TempDir()
-	image := "ghcr.io/wranglerlabs/repo-wrangler-server@sha256:" + strings.Repeat("a", 64)
+	image := repoWranglerV1010Companion.image
 	postgres := "docker.io/library/postgres:16@sha256:" + strings.Repeat("b", 64)
 	identity := `{"schemaVersion":"1.0","product":"RepoWrangler","version":"v1.2.3","targetFamily":"compose","image":"` + image + `","postgresImage":"` + postgres + `","publicHttps":"operator-provided","defaultBindAddress":"127.0.0.1"}`
 	compose := "services:\n  server:\n    image: " + image + "\n    ports:\n      - \"${BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080\"\n    env_file: [.env]\n    volumes: [rw-data:/app/data]\nvolumes:\n  rw-data:\n"
@@ -43,9 +47,9 @@ type fakeRemoteHost struct {
 	resources   bool
 	composeDown bool
 	unowned     bool
-	pullError   bool
 	badImageID  bool
 	commands    []string
+	loadedImage []byte
 }
 
 func newFakeRemoteHost() *fakeRemoteHost { return &fakeRemoteHost{files: make(map[string][]byte)} }
@@ -61,13 +65,8 @@ func (h *fakeRemoteHost) Run(_ context.Context, command string, stdin []byte) (s
 		return "29.0.0/linux/amd64", nil
 	case command == "docker compose version --short":
 		return "2.40.0", nil
-	case strings.HasPrefix(command, "docker image pull "):
-		if h.pullError {
-			return "error from registry: unauthorized", errors.New("exit status 1")
-		}
-		return "pulled", nil
 	case strings.HasPrefix(command, "docker image inspect --format '{{.Id}}' "):
-		return "sha256:" + strings.Repeat("a", 64), nil
+		return repoWranglerV1010Companion.imageID, nil
 	case strings.HasPrefix(command, "test ! -e "):
 		if h.directory {
 			return "", errors.New("exists")
@@ -199,6 +198,15 @@ func (h *fakeRemoteHost) Run(_ context.Context, command string, stdin []byte) (s
 	}
 }
 
+func (h *fakeRemoteHost) LoadImage(_ context.Context, source io.Reader) (string, error) {
+	contents, err := io.ReadAll(source)
+	if err != nil {
+		return "", err
+	}
+	h.loadedImage = contents
+	return "Loaded image: " + repoWranglerV1010Companion.runtimeImage, nil
+}
+
 func (h *fakeRemoteHost) marker() remoteInstallation {
 	var marker remoteInstallation
 	_ = json.Unmarshal(h.files[remoteMarkerName], &marker)
@@ -253,16 +261,44 @@ func TestWSLRealModeGeneratesRequiredSetupSecrets(t *testing.T) {
 	}
 }
 
-func TestRemoteEvaluationInstallPullsBeforeCreatingTargetBoundary(t *testing.T) {
-	host := newFakeRemoteHost()
-	host.pullError = true
-	adapter := newRemoteLinuxCompose(func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error) { return host, nil })
-	err := adapter.Apply(context.Background(), lifecycle.Install, remoteEvaluationPlan(), "", stagedRemoteBundle(t), lifecycle.OperationBackups{}, Credentials{SSHPassword: "runtime-only"})
-	if err == nil || !strings.Contains(err.Error(), "pull verified release image before target mutation") || !strings.Contains(err.Error(), "unauthorized") {
-		t.Fatalf("registry failure was not reported at the pre-mutation boundary: %v", err)
+func TestRemoteEvaluationInstallStreamsVerifiedImageWithoutRegistryPull(t *testing.T) {
+	t.Setenv("LocalAppData", t.TempDir())
+	archive := []byte("small verified Docker archive fixture")
+	digest := sha256.Sum256(archive)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+		_, _ = response.Write(archive)
+	}))
+	defer server.Close()
+
+	original := repoWranglerV1010Companion
+	repoWranglerV1010Companion = companionImage{
+		image:        "ghcr.io/wranglerlabs/repo-wrangler-server@sha256:" + strings.Repeat("a", 64),
+		runtimeImage: "repo-wrangler-server:test-verified-archive",
+		imageID:      "sha256:" + strings.Repeat("a", 64),
+		url:          server.URL + "/repo-wrangler-test-image.tar.gz",
+		sha256:       fmt.Sprintf("%x", digest),
+		size:         int64(len(archive)),
 	}
-	if host.directory || host.resources || len(host.files) != 0 {
-		t.Fatal("registry failure created installation files or Docker resources")
+	t.Cleanup(func() { repoWranglerV1010Companion = original })
+
+	host := newFakeRemoteHost()
+	adapter := newRemoteLinuxCompose(func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error) { return host, nil })
+	adapter.prepareReleaseImage = adapter.prepareRemoteCompanion
+	if err := adapter.Apply(context.Background(), lifecycle.Install, remoteEvaluationPlan(), "", stagedRemoteBundle(t), lifecycle.OperationBackups{}, Credentials{SSHPassword: "runtime-only"}); err != nil {
+		t.Fatal(err)
+	}
+	if string(host.loadedImage) != string(archive) {
+		t.Fatal("verified image archive was not streamed to the remote Docker Engine")
+	}
+	for _, command := range host.commands {
+		if strings.HasPrefix(command, "docker image pull ") {
+			t.Fatalf("remote archive install contacted a registry: %s", command)
+		}
+	}
+	override := string(host.files["ranch-hand.override.yaml"])
+	if !strings.Contains(override, "pull_policy: never") || !strings.Contains(override, repoWranglerV1010Companion.runtimeImage) {
+		t.Fatalf("remote Compose was not pinned to the loaded image: %s", override)
 	}
 }
 

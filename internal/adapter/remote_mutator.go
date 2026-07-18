@@ -52,7 +52,27 @@ func (a *RemoteLinuxCompose) Backup(context.Context, plan.DeploymentPlan, string
 }
 
 func (a *RemoteLinuxCompose) Apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, _ string, staged bundle.StagedBundle, backups lifecycle.OperationBackups, credentials Credentials) error {
-	return a.apply(ctx, kind, candidate, staged, backups, credentials, "")
+	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
+		return errors.New("the remote Linux Compose adapter currently supports only a new evaluation install")
+	}
+	if err := candidate.Validate(); err != nil {
+		return err
+	}
+	if staged.Target != "remote-linux-compose" {
+		return errors.New("remote Linux adapter requires a remote-linux-compose bundle")
+	}
+	identity, err := bundle.ReadIdentity(staged)
+	if err != nil {
+		return err
+	}
+	if a.prepareReleaseImage == nil {
+		return errors.New("remote Linux verified image preparation is unavailable")
+	}
+	runtimeImage, err := a.prepareReleaseImage(ctx, candidate, credentials, identity.Image)
+	if err != nil {
+		return fmt.Errorf("prepare verified release image on remote Linux: %w", err)
+	}
+	return a.apply(ctx, kind, candidate, staged, backups, credentials, runtimeImage)
 }
 
 func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, staged bundle.StagedBundle, backups lifecycle.OperationBackups, credentials Credentials, runtimeImage string) error {
@@ -78,18 +98,10 @@ func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.Operation
 		return err
 	}
 	defer host.Close()
-	if runtimeImage == "" {
-		runtimeImage = identity.Image
+	if runtimeImage == "" || runtimeImage == identity.Image {
+		return errors.New("remote Linux requires a separately verified loaded release image")
 	}
-	if runtimeImage == identity.Image {
-		output, pullErr := host.Run(ctx, "docker image pull "+shellQuote(identity.Image), nil)
-		if pullErr != nil {
-			if output != "" {
-				return fmt.Errorf("pull verified release image before target mutation: %w: %s", pullErr, boundedCommandFailure(output))
-			}
-			return fmt.Errorf("pull verified release image before target mutation: %w", pullErr)
-		}
-	} else if output, inspectErr := host.Run(ctx, "docker image inspect --format '{{.Id}}' "+shellQuote(runtimeImage), nil); inspectErr != nil || output == "" {
+	if output, inspectErr := host.Run(ctx, "docker image inspect --format '{{.Id}}' "+shellQuote(runtimeImage), nil); inspectErr != nil || output == "" {
 		if output != "" {
 			return fmt.Errorf("verify loaded release image before target mutation: %w: %s", inspectErr, boundedCommandFailure(output))
 		}
@@ -120,10 +132,8 @@ func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.Operation
 		VolumeName: volumeName, Image: identity.Image, ComposeSHA256: bytesSHA256(compose),
 		OverrideSHA256: bytesSHA256(override), EnvironmentSHA256: bytesSHA256(environment),
 	}
-	if runtimeImage != identity.Image {
-		marker.SchemaVersion = "1.1"
-		marker.RuntimeImage = runtimeImage
-	}
+	marker.SchemaVersion = "1.1"
+	marker.RuntimeImage = runtimeImage
 	markerJSON, err := json.MarshalIndent(marker, "", "  ")
 	if err != nil {
 		return err

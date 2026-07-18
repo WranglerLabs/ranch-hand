@@ -63,6 +63,8 @@ func (h *fakeRemoteHost) Run(_ context.Context, command string, stdin []byte) (s
 			return "error from registry: unauthorized", errors.New("exit status 1")
 		}
 		return "pulled", nil
+	case strings.HasPrefix(command, "docker image inspect --format '{{.Id}}' "):
+		return "sha256:" + strings.Repeat("a", 64), nil
 	case strings.HasPrefix(command, "test ! -e "):
 		if h.directory {
 			return "", errors.New("exists")
@@ -173,7 +175,11 @@ func (h *fakeRemoteHost) Run(_ context.Context, command string, stdin []byte) (s
 		})
 		return string(encoded), nil
 	case strings.Contains(command, "inspect --format '{{.Config.Image}}'"):
-		return h.marker().Image, nil
+		marker := h.marker()
+		if marker.RuntimeImage != "" {
+			return marker.RuntimeImage, nil
+		}
+		return marker.Image, nil
 	case strings.Contains(command, "inspect --format '{{.State.Running}}'"):
 		return "true", nil
 	case strings.HasPrefix(command, "rm --force -- "):
@@ -230,6 +236,43 @@ func TestRemoteEvaluationInstallPullsBeforeCreatingTargetBoundary(t *testing.T) 
 	}
 	if host.directory || host.resources || len(host.files) != 0 {
 		t.Fatal("registry failure created installation files or Docker resources")
+	}
+}
+
+func TestWSLStyleInstallUsesVerifiedLoadedImageWithoutRegistryPull(t *testing.T) {
+	host := newFakeRemoteHost()
+	adapter := newRemoteLinuxCompose(func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error) { return host, nil })
+	candidate := remoteEvaluationPlan()
+	staged := stagedRemoteBundle(t)
+	for _, name := range []string{"bundle.json", "compose.yaml"} {
+		path := filepath.Join(staged.Path, name)
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		contents = []byte(strings.ReplaceAll(string(contents), "ghcr.io/wranglerlabs/repo-wrangler-server@sha256:"+strings.Repeat("a", 64), repoWranglerV1010Companion.image))
+		if err := os.WriteFile(path, contents, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := adapter.apply(context.Background(), lifecycle.Install, candidate, staged, lifecycle.OperationBackups{}, Credentials{}, repoWranglerV1010Companion.runtimeImage); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range host.commands {
+		if strings.HasPrefix(command, "docker image pull ") {
+			t.Fatalf("loaded-image install contacted a registry: %s", command)
+		}
+	}
+	override := string(host.files["ranch-hand.override.yaml"])
+	if !strings.Contains(override, "image: "+repoWranglerV1010Companion.runtimeImage) || !strings.Contains(override, "pull_policy: never") {
+		t.Fatalf("loaded image was not fixed in the Compose override: %s", override)
+	}
+	marker := host.marker()
+	if marker.SchemaVersion != "1.1" || marker.RuntimeImage != repoWranglerV1010Companion.runtimeImage {
+		t.Fatalf("loaded image identity was not recorded: %+v", marker)
+	}
+	if err := adapter.Verify(context.Background(), candidate, Credentials{}); err != nil {
+		t.Fatal(err)
 	}
 }
 

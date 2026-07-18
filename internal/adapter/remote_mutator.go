@@ -40,6 +40,7 @@ type remoteInstallation struct {
 	ContainerName     string `json:"containerName"`
 	VolumeName        string `json:"volumeName"`
 	Image             string `json:"image"`
+	RuntimeImage      string `json:"runtimeImage,omitempty"`
 	ComposeSHA256     string `json:"composeSha256"`
 	OverrideSHA256    string `json:"overrideSha256"`
 	EnvironmentSHA256 string `json:"environmentSha256"`
@@ -50,6 +51,10 @@ func (a *RemoteLinuxCompose) Backup(context.Context, plan.DeploymentPlan, string
 }
 
 func (a *RemoteLinuxCompose) Apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, _ string, staged bundle.StagedBundle, backups lifecycle.OperationBackups, credentials Credentials) error {
+	return a.apply(ctx, kind, candidate, staged, backups, credentials, "")
+}
+
+func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, staged bundle.StagedBundle, backups lifecycle.OperationBackups, credentials Credentials, runtimeImage string) error {
 	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return errors.New("the remote Linux Compose adapter currently supports only a new evaluation install")
 	}
@@ -68,11 +73,22 @@ func (a *RemoteLinuxCompose) Apply(ctx context.Context, kind lifecycle.Operation
 		return err
 	}
 	defer host.Close()
-	if output, err := host.Run(ctx, "docker image pull "+shellQuote(identity.Image), nil); err != nil {
-		if output != "" {
-			return fmt.Errorf("pull verified release image before target mutation: %w: %s", err, boundedCommandFailure(output))
+	if runtimeImage == "" {
+		runtimeImage = identity.Image
+	}
+	if runtimeImage == identity.Image {
+		output, pullErr := host.Run(ctx, "docker image pull "+shellQuote(identity.Image), nil)
+		if pullErr != nil {
+			if output != "" {
+				return fmt.Errorf("pull verified release image before target mutation: %w: %s", pullErr, boundedCommandFailure(output))
+			}
+			return fmt.Errorf("pull verified release image before target mutation: %w", pullErr)
 		}
-		return fmt.Errorf("pull verified release image before target mutation: %w", err)
+	} else if output, inspectErr := host.Run(ctx, "docker image inspect --format '{{.Id}}' "+shellQuote(runtimeImage), nil); inspectErr != nil || output == "" {
+		if output != "" {
+			return fmt.Errorf("verify loaded release image before target mutation: %w: %s", inspectErr, boundedCommandFailure(output))
+		}
+		return errors.New("verify loaded release image before target mutation: image is unavailable")
 	}
 	if err := remoteBoundaryAvailable(ctx, host, candidate); err != nil {
 		return err
@@ -92,13 +108,17 @@ func (a *RemoteLinuxCompose) Apply(ctx context.Context, kind lifecycle.Operation
 	project := candidate.Configuration["projectName"]
 	containerName := project + "-server"
 	volumeName := project + "-data"
-	override := []byte(remoteOverride(project, containerName, volumeName, deploymentID, candidate.Release.Version))
+	override := []byte(remoteOverride(project, containerName, volumeName, deploymentID, candidate.Release.Version, runtimeImage))
 	environment := []byte(remoteEnvironment(candidate.Release.Version))
 	marker := remoteInstallation{
 		SchemaVersion: "1.0", DeploymentID: deploymentID, Version: candidate.Release.Version,
 		ArtifactSHA256: candidate.Release.ArtifactSHA256, ProjectName: project, ContainerName: containerName,
 		VolumeName: volumeName, Image: identity.Image, ComposeSHA256: bytesSHA256(compose),
 		OverrideSHA256: bytesSHA256(override), EnvironmentSHA256: bytesSHA256(environment),
+	}
+	if runtimeImage != identity.Image {
+		marker.SchemaVersion = "1.1"
+		marker.RuntimeImage = runtimeImage
 	}
 	markerJSON, err := json.MarshalIndent(marker, "", "  ")
 	if err != nil {
@@ -139,9 +159,14 @@ func remoteBoundaryAvailable(ctx context.Context, host remoteHost, candidate pla
 	return nil
 }
 
-func remoteOverride(project, containerName, volumeName, deploymentID, version string) string {
+func remoteOverride(project, containerName, volumeName, deploymentID, version, runtimeImage string) string {
+	imageOverride := ""
+	if runtimeImage != "" && !remotePinnedImage(runtimeImage) {
+		imageOverride = "    image: " + runtimeImage + "\n    pull_policy: never\n"
+	}
 	return fmt.Sprintf(`services:
   server:
+%s
     container_name: %s
     labels:
       wranglerlabs.ranch-hand.managed: "true"
@@ -154,7 +179,7 @@ volumes:
       wranglerlabs.ranch-hand.managed: "true"
       wranglerlabs.ranch-hand.deployment: "%s"
       wranglerlabs.ranch-hand.version: "%s"
-`, containerName, deploymentID, version, volumeName, deploymentID, version)
+`, imageOverride, containerName, deploymentID, version, volumeName, deploymentID, version)
 }
 
 func remoteEnvironment(version string) string {
@@ -228,10 +253,15 @@ func readRemoteMarker(ctx context.Context, host remoteHost, candidate plan.Deplo
 	if err != nil {
 		return remoteInstallation{}, err
 	}
-	if marker.SchemaVersion != "1.0" || marker.DeploymentID != deploymentID || marker.Version != candidate.Release.Version || marker.ArtifactSHA256 != candidate.Release.ArtifactSHA256 || marker.ProjectName != candidate.Configuration["projectName"] || marker.ContainerName != marker.ProjectName+"-server" || marker.VolumeName != marker.ProjectName+"-data" || !remotePinnedImage(marker.Image) || !remoteDigestPattern.MatchString(marker.ComposeSHA256) || !remoteDigestPattern.MatchString(marker.OverrideSHA256) || !remoteDigestPattern.MatchString(marker.EnvironmentSHA256) {
+	validSchema := (marker.SchemaVersion == "1.0" && marker.RuntimeImage == "") || (marker.SchemaVersion == "1.1" && validLoadedRuntimeImage(marker.Image, marker.RuntimeImage))
+	if !validSchema || marker.DeploymentID != deploymentID || marker.Version != candidate.Release.Version || marker.ArtifactSHA256 != candidate.Release.ArtifactSHA256 || marker.ProjectName != candidate.Configuration["projectName"] || marker.ContainerName != marker.ProjectName+"-server" || marker.VolumeName != marker.ProjectName+"-data" || !remotePinnedImage(marker.Image) || !remoteDigestPattern.MatchString(marker.ComposeSHA256) || !remoteDigestPattern.MatchString(marker.OverrideSHA256) || !remoteDigestPattern.MatchString(marker.EnvironmentSHA256) {
 		return remoteInstallation{}, errors.New("remote Ranch Hand ownership marker does not match this deployment")
 	}
 	return marker, nil
+}
+
+func validLoadedRuntimeImage(image, runtimeImage string) bool {
+	return image == repoWranglerV1010Companion.image && runtimeImage == repoWranglerV1010Companion.runtimeImage
 }
 
 func remotePinnedImage(value string) bool {
@@ -258,8 +288,12 @@ func verifyRemoteResources(ctx context.Context, host remoteHost, marker remoteIn
 	if err := verifyRemoteLabels(labelsJSON, marker); err != nil {
 		return err
 	}
+	expectedImage := marker.Image
+	if marker.RuntimeImage != "" {
+		expectedImage = marker.RuntimeImage
+	}
 	image, err := host.Run(ctx, "docker container inspect --format '{{.Config.Image}}' "+shellQuote(marker.ContainerName), nil)
-	if err != nil || image != marker.Image {
+	if err != nil || image != expectedImage {
 		return errors.New("remote container does not use the verified immutable image")
 	}
 	running, err := host.Run(ctx, "docker container inspect --format '{{.State.Running}}' "+shellQuote(marker.ContainerName), nil)

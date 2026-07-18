@@ -2,7 +2,7 @@
 
 Ranch Hand is the standalone, Windows-first lifecycle manager for [RepoWrangler](https://github.com/WranglerLabs/repo-wrangler). It is for operators who want to install and manage RepoWrangler without cloning or forking its source repository. Contributors and advanced operators can still use RepoWrangler's documented deployment recipes directly.
 
-> **Status: Public Preview.** [`v0.1.0-rc.5`](docs/releases/v0.1.0-rc.5.md)
+> **Status: Public Preview.** [`v0.1.0-rc.6`](docs/releases/v0.1.0-rc.6.md)
 > is the primary recommended Windows deployment path for RepoWrangler. It is
 > publicly downloadable and functional, but it is unsigned and not production
 > supported or generally available. See the complete [GA readiness
@@ -73,6 +73,13 @@ creates its Docker-managed data volume, binds
 
 This Preview supports a new WSL evaluation install. WSL backup, update, restore,
 rollback, repair, and uninstall remain open lifecycle work.
+
+If an install is interrupted after Ranch Hand creates its dedicated directory,
+the next preflight recognizes the matching durable journal and offers
+**Recover interrupted WSL installation** beside the result. Recovery removes
+only resources whose marker, transferred-file hashes, and Docker labels prove
+exact ownership. A committed installation is reported as already installed;
+an unknown directory remains blocked and untouched.
 
 ## Local Docker Desktop evaluation install
 

@@ -66,6 +66,20 @@ var repoWranglerV1013Companion = companionImage{
 	size:   280755795,
 }
 
+var repoWranglerV1014Companion = companionImage{
+	image:        "ghcr.io/wranglerlabs/repo-wrangler-server@sha256:d4a4ed70f919f85c8bd337885c0123fa7c100266616d10dbc9b9a17ceb57a8e9",
+	runtimeImage: "repo-wrangler-ranch-hand:v1.0.14",
+	imageID:      "sha256:1b9e11ffcdaf48e9481064bc7ab1ea93ebc4872f120624e3798b36c69f156b5e",
+	imageIDs: []string{
+		"sha256:d4a4ed70f919f85c8bd337885c0123fa7c100266616d10dbc9b9a17ceb57a8e9",
+		"sha256:ef3b0886a895bf4ba58311af475ea9fee2a3a16f9d80a013cd313cc57ebfcee8",
+		"sha256:1b9e11ffcdaf48e9481064bc7ab1ea93ebc4872f120624e3798b36c69f156b5e",
+	},
+	url:    "https://github.com/WranglerLabs/repo-wrangler/releases/download/v1.0.14/repo-wrangler-v1.0.14-linux-amd64-image.tar.gz",
+	sha256: "444df865f825174cac14d470ad2500fbbd87b99951f7fd14d9c4cadc1361bd06",
+	size:   280764825,
+}
+
 func companionLoadedImageMatches(companion companionImage, loaded string) bool {
 	loaded = strings.TrimSpace(loaded)
 	if loaded == companion.imageID {
@@ -80,6 +94,9 @@ func companionLoadedImageMatches(companion companionImage, loaded string) bool {
 }
 
 func companionForImage(image string) (companionImage, error) {
+	if image == repoWranglerV1014Companion.image {
+		return repoWranglerV1014Companion, nil
+	}
 	if image == repoWranglerV1013Companion.image {
 		return repoWranglerV1013Companion, nil
 	}

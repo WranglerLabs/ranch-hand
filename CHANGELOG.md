@@ -6,6 +6,30 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.24] - 2026-07-18
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- WSL real-mode installs now open `http://127.0.0.1:8080/onboarding`
+  explicitly after installation and from managed-deployment links. Demo-mode
+  deployments continue to open the application root.
+- Ranch Hand now selects and verifies RepoWrangler v1.0.14, whose service
+  worker never caches or falls back to an old root application shell. It also
+  forces service-worker update checks to bypass the browser HTTP cache.
+- The v1.0.14 offline image trust record pins the registry index, archive
+  platform manifest, image config, archive SHA-256, and exact byte size.
+
+### Verification
+
+- Full Go test suite and `go vet ./...` pass.
+- React TypeScript checking and production build pass.
+- Windows AMD64 executable compilation passes.
+- The published RepoWrangler archive identities were independently verified
+  from its release manifest, SHA256SUMS, OCI index, and Docker manifest.
+
 ## [0.1.0-rc.23] - 2026-07-18
 
 **Classification: Public Preview.** Publicly downloadable and intended for

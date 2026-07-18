@@ -6,6 +6,31 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.13] - 2026-07-18
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- Local WSL Compose no longer pulls RepoWrangler v1.0.10 from GHCR. Ranch Hand
+  downloads the exact public companion image archive from its immutable rc.13
+  release, verifies its hard-coded size and SHA-256, caches it, and streams it
+  into the selected WSL Docker Engine.
+- The generated WSL Compose override selects the verified locally loaded image
+  and enforces `pull_policy: never`, so installation requires no GitHub account,
+  registry credentials, or registry request.
+- The ownership marker separately records the immutable product image digest
+  and the verified runtime tag, allowing recovery and verification to retain
+  exact identity checks without pretending the local tag is a registry digest.
+
+### Verification
+
+- Loaded the 286,575,554-byte archive into a clean local tag, verified image ID
+  `sha256:89d1b4091137eef57c91270d363fb6c76e6d60c94dcac92b129b2b8629f45093`,
+  started RepoWrangler with `--pull never`, and received the exact v1.0.10 live
+  health identity before ownership-safe cleanup.
+
 ## [0.1.0-rc.12] - 2026-07-18
 
 **Classification: Public Preview.** Publicly downloadable and intended for

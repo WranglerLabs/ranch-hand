@@ -12,7 +12,7 @@ its [manual deployment recipes](https://github.com/WranglerLabs/repo-wrangler/tr
 
 ## Current availability
 
-There is no signed GA Ranch Hand installer yet. `v0.1.0-rc.12` is an unsigned
+There is no signed GA Ranch Hand installer yet. `v0.1.0-rc.13` is an unsigned
 Public Preview published as a stable prerelease download. It is intended for
 evaluation and feedback, not production support.
 
@@ -23,13 +23,13 @@ organizational security policy.
 ## Download and verify the Public Preview
 
 1. Open the public [Ranch Hand for Windows guide](https://wranglerlabs.org/ranch-hand)
-   and select **Download Ranch Hand v0.1.0-rc.12 for Windows (64-bit)**. A GitHub
+   and select **Download Ranch Hand v0.1.0-rc.13 for Windows (64-bit)**. A GitHub
    account is not required.
 2. In PowerShell, verify the executable before running it:
 
    ```powershell
-   Get-FileHash .\ranch-hand-v0.1.0-rc.12-windows-amd64.exe -Algorithm SHA256
-   Get-AuthenticodeSignature .\ranch-hand-v0.1.0-rc.12-windows-amd64.exe
+   Get-FileHash .\ranch-hand-v0.1.0-rc.13-windows-amd64.exe -Algorithm SHA256
+   Get-AuthenticodeSignature .\ranch-hand-v0.1.0-rc.13-windows-amd64.exe
    ```
 
    Compare the result with the `.sha256` file published beside the executable
@@ -40,7 +40,7 @@ organizational security policy.
 3. For optional GitHub provenance verification, install GitHub CLI and run:
 
    ```powershell
-   gh attestation verify .\ranch-hand-v0.1.0-rc.12-windows-amd64.exe `
+   gh attestation verify .\ranch-hand-v0.1.0-rc.13-windows-amd64.exe `
      --repo WranglerLabs/ranch-hand
    ```
 
@@ -49,7 +49,7 @@ Windows code-signing certificate.
 
 ## Launch Ranch Hand
 
-Double-click `ranch-hand-v0.1.0-rc.12-windows-amd64.exe`, or start it from
+Double-click `ranch-hand-v0.1.0-rc.13-windows-amd64.exe`, or start it from
 PowerShell. Ranch Hand binds a random port on `127.0.0.1`, opens the interface in
 your default browser, and protects that browser session with a random one-time
 launch token.
@@ -67,7 +67,7 @@ existing environment.
 
 | Target | What you need | Current boundary |
 |---|---|---|
-| Local Docker Compose — WSL | WSL2 distribution with a running Linux Docker Engine and Docker Compose v2 | Ranch Hand detects the distribution, defaults to the collision-resistant `repo-wrangler-ranch-hand` project, and fixes the Docker volume and Windows listen address automatically. Docker Desktop, SSH, a WSL IP, and a filesystem path are not required. New evaluation install is available; lifecycle follow-ups remain open. |
+| Local Docker Compose — WSL | WSL2 distribution with a running Linux Docker Engine and Docker Compose v2 | Ranch Hand detects the distribution, verifies and caches the public v1.0.10 image archive, loads it directly into WSL, and runs Compose with pulls disabled. Docker Desktop, SSH, a WSL IP, filesystem path, GitHub account, token, and registry login are not required. New evaluation install is available; lifecycle follow-ups remain open. |
 | Local Docker Desktop | Docker Desktop running Linux containers | Windows Docker API, loopback-only demo/SQLite deployment. Full backup, update, restore, rollback, repair, recovery, and rollback-pool retention are available. |
 | Azure Container Apps | An Azure subscription, permission to create a dedicated resource group and ACA resources, and a temporary ARM access token | New resource group, demo mode, SQLite on Azure Files, and Azure-managed HTTPS. Resources can incur Azure charges. Existing groups, PostgreSQL, production credentials, custom domains, and update are not enabled. |
 | Cloudflare | Account ID, unused Worker and D1 names, a workers.dev subdomain, and a scoped API token with account read, Workers Scripts write, and D1 write access | New Worker and D1 database in demo mode with Cloudflare-managed workers.dev HTTPS. Existing resources, custom domains, production secrets, backup, and update are not enabled. |

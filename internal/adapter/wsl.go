@@ -135,12 +135,23 @@ func (a *WSLCompose) Backup(context.Context, plan.DeploymentPlan, string, Creden
 }
 
 func (a *WSLCompose) Apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, fromVersion string, staged bundle.StagedBundle, backups lifecycle.OperationBackups, credentials Credentials) error {
+	if err := candidate.Validate(); err != nil {
+		return err
+	}
+	identity, err := bundle.ReadIdentity(staged)
+	if err != nil {
+		return err
+	}
+	runtimeImage, err := prepareWSLCompanion(ctx, candidate.Configuration["distribution"], identity.Image)
+	if err != nil {
+		return fmt.Errorf("prepare verified public WSL image: %w", err)
+	}
 	normalized, err := a.normalized(ctx, candidate)
 	if err != nil {
 		return err
 	}
 	staged.Target = "remote-linux-compose"
-	return a.delegate.Apply(ctx, kind, normalized, fromVersion, staged, backups, credentials)
+	return a.delegate.apply(ctx, kind, normalized, staged, backups, credentials, runtimeImage)
 }
 
 func (a *WSLCompose) Verify(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) error {

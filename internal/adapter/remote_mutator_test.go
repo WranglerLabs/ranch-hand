@@ -84,6 +84,15 @@ func (h *fakeRemoteHost) Run(_ context.Context, command string, stdin []byte) (s
 			return "", errors.New("missing")
 		}
 		return string(contents), nil
+	case strings.HasPrefix(command, "if [ ! -e "):
+		if !h.directory {
+			return "", nil
+		}
+		if len(h.files) != 0 {
+			return "", errors.New("directory is not empty")
+		}
+		h.directory = false
+		return "", nil
 	case strings.HasPrefix(command, "sha256sum -- "):
 		for _, name := range []string{"compose.yaml", "ranch-hand.override.yaml", ".env"} {
 			if strings.Contains(command, "/"+name+"'") {
@@ -205,5 +214,23 @@ func TestRemoteRecoveryRefusesUnownedContainer(t *testing.T) {
 	host.unowned = true
 	if err := adapter.Recover(context.Background(), lifecycle.Install, candidate, "", lifecycle.OperationBackups{}, credentials); err == nil || host.composeDown {
 		t.Fatal("remote recovery deleted or accepted an unowned container")
+	}
+}
+
+func TestRemoteRecoveryRemovesOnlyEmptyPreMarkerDirectory(t *testing.T) {
+	host := newFakeRemoteHost()
+	host.directory = true
+	adapter := newRemoteLinuxCompose(func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error) { return host, nil })
+	if err := adapter.Recover(context.Background(), lifecycle.Install, remoteEvaluationPlan(), "", lifecycle.OperationBackups{}, Credentials{SSHPassword: "runtime-only"}); err != nil {
+		t.Fatal(err)
+	}
+	if host.directory || host.composeDown {
+		t.Fatal("pre-marker recovery did not remove only the empty directory")
+	}
+
+	host.directory = true
+	host.files["unknown"] = []byte("do not remove")
+	if err := adapter.Recover(context.Background(), lifecycle.Install, remoteEvaluationPlan(), "", lifecycle.OperationBackups{}, Credentials{SSHPassword: "runtime-only"}); err == nil || !host.directory || len(host.files) != 1 {
+		t.Fatal("pre-marker recovery removed or accepted a non-empty directory")
 	}
 }

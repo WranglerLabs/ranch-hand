@@ -305,6 +305,11 @@ func (a *RemoteLinuxCompose) Recover(ctx context.Context, kind lifecycle.Operati
 	defer host.Close()
 	marker, err := readRemoteMarker(ctx, host, candidate)
 	if err != nil {
+		directory := candidate.Configuration["installDirectory"]
+		removeEmpty := "if [ ! -e " + shellQuote(directory) + " ]; then exit 0; fi; rmdir -- " + shellQuote(directory)
+		if _, removeErr := host.Run(ctx, removeEmpty, nil); removeErr == nil {
+			return nil
+		}
 		return errors.New("refusing remote cleanup without the exact Ranch Hand ownership marker")
 	}
 	if err := verifyRemoteFiles(ctx, host, candidate, marker); err != nil {

@@ -2,7 +2,7 @@
 
 Ranch Hand is the standalone, Windows-first lifecycle manager for [RepoWrangler](https://github.com/WranglerLabs/repo-wrangler). It is for operators who want to install and manage RepoWrangler without cloning or forking its source repository. Contributors and advanced operators can still use RepoWrangler's documented deployment recipes directly.
 
-> **Status: Public Preview.** [`v0.1.0-rc.6`](docs/releases/v0.1.0-rc.6.md)
+> **Status: Public Preview.** [`v0.1.0-rc.7`](docs/releases/v0.1.0-rc.7.md)
 > is the primary recommended Windows deployment path for RepoWrangler. It is
 > publicly downloadable and functional, but it is unsigned and not production
 > supported or generally available. See the complete [GA readiness

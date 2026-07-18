@@ -6,6 +6,19 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.7] - 2026-07-17
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- Completed interrupted WSL recovery for the earliest apply crash boundary:
+  Ranch Hand can remove its exact dedicated directory when it is still empty
+  because the process stopped before writing the ownership marker.
+- Preserved the refusal boundary for any markerless directory containing a file
+  or subdirectory. Ranch Hand never recursively removes or adopts that path.
+
 ## [0.1.0-rc.6] - 2026-07-17
 
 **Classification: Public Preview.** Publicly downloadable and intended for

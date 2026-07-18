@@ -6,6 +6,28 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.21] - 2026-07-18
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- WSL and Remote Linux image loading now accepts the verified registry-index,
+  platform-manifest, or image-config digest reported by the target Docker image
+  store. RC20 incorrectly required one representation and could reject the
+  correct RepoWrangler v1.0.12 archive after Docker loaded it successfully.
+- Image verification remains closed to unknown digests: every accepted engine
+  identity is pinned in the companion archive trust record and covered by a
+  rejection regression test.
+
+### Verification
+
+- Full Go test suite passes.
+- `go vet ./...` passes.
+- React TypeScript checking and production build pass.
+- Windows AMD64 executable compilation passes.
+
 ## [0.1.0-rc.20] - 2026-07-18
 
 **Classification: Public Preview.** Publicly downloadable and intended for

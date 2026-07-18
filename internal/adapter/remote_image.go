@@ -56,8 +56,8 @@ func (a *RemoteLinuxCompose) prepareRemoteCompanion(ctx context.Context, candida
 	if inspectErr != nil {
 		return "", fmt.Errorf("inspect loaded release image: %w", inspectErr)
 	}
-	if strings.TrimSpace(loadedID) != companion.imageID {
-		return "", errors.New("loaded release image ID does not match the verified immutable image")
+	if !companionLoadedImageMatches(companion, loadedID) {
+		return "", fmt.Errorf("loaded release image identity %q is not in the verified immutable image trust record", strings.TrimSpace(loadedID))
 	}
 	return companion.runtimeImage, nil
 }

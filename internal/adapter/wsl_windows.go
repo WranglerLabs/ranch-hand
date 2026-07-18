@@ -120,7 +120,7 @@ func installWSLDockerPrerequisites(ctx context.Context, distribution, user strin
 	return nil
 }
 
-func loadWSLImageArchive(ctx context.Context, distribution, archive, runtimeImage, expectedImageID string) error {
+func loadWSLImageArchive(ctx context.Context, distribution, archive string, companion companionImage) error {
 	file, err := os.Open(archive)
 	if err != nil {
 		return fmt.Errorf("open verified WSL image archive: %w", err)
@@ -135,9 +135,12 @@ func loadWSLImageArchive(ctx context.Context, distribution, archive, runtimeImag
 		return fmt.Errorf("load verified release image into WSL Docker Engine: %w: %s", err, boundedCommandFailure(output.String()))
 	}
 	host := &wslHost{distribution: distribution, client: &http.Client{Timeout: 30 * time.Second}}
-	loaded, err := host.Run(ctx, "docker image inspect --format '{{.Id}}' "+shellQuote(runtimeImage), nil)
-	if err != nil || loaded != expectedImageID {
-		return errors.New("loaded WSL image does not match the verified RepoWrangler release identity")
+	loaded, err := host.Run(ctx, "docker image inspect --format '{{.Id}}' "+shellQuote(companion.runtimeImage), nil)
+	if err != nil {
+		return errors.New("Docker could not inspect the verified RepoWrangler image after loading it")
+	}
+	if !companionLoadedImageMatches(companion, loaded) {
+		return fmt.Errorf("loaded WSL image identity %q is not in the verified RepoWrangler release trust record", loaded)
 	}
 	return nil
 }

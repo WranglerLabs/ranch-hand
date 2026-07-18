@@ -92,6 +92,15 @@ func (h *fakeRemoteHost) Run(_ context.Context, command string, stdin []byte) (s
 			return "", errors.New("missing")
 		}
 		return string(contents), nil
+	case strings.HasPrefix(command, "if [ ! -e ") && !strings.Contains(command, "rm --force"):
+		if !h.directory {
+			return "", nil
+		}
+		if len(h.files) != 0 {
+			return "", errors.New("directory not empty")
+		}
+		h.directory = false
+		return "", nil
 	case strings.HasPrefix(command, "if [ ! -e "):
 		if !h.directory {
 			return "", nil
@@ -100,6 +109,20 @@ func (h *fakeRemoteHost) Run(_ context.Context, command string, stdin []byte) (s
 			known := name == "compose.yaml" || name == "compose.yaml.ranch-hand-tmp" || name == "ranch-hand.override.yaml" || name == "ranch-hand.override.yaml.ranch-hand-tmp" || name == ".env" || name == ".env.ranch-hand-tmp" || name == remoteMarkerName+".ranch-hand-tmp" || (name == remoteMarkerName && len(h.files[name]) == 0 && strings.Contains(command, "test ! -s"))
 			if !known {
 				return "", errors.New("directory contains unknown content")
+			}
+		}
+		h.files = make(map[string][]byte)
+		h.directory = false
+		return "", nil
+	case strings.HasPrefix(command, "test -d ") && strings.Contains(command, "test ! -s"):
+		expected := map[string]bool{"compose.yaml": true, "ranch-hand.override.yaml": true, ".env": true, remoteMarkerName: true}
+		if len(h.files) != len(expected) {
+			return "", errors.New("legacy directory contains unknown content")
+		}
+		for name := range expected {
+			contents, ok := h.files[name]
+			if !ok || len(contents) != 0 {
+				return "", errors.New("legacy file is missing or non-empty")
 			}
 		}
 		h.files = make(map[string][]byte)
@@ -213,6 +236,54 @@ func TestRemoteRecoveryRemovesOnlyMarkerOwnedResources(t *testing.T) {
 	}
 	if !host.composeDown || host.directory || host.resources {
 		t.Fatal("owned failed-install remote project was not removed")
+	}
+}
+
+func TestRemoteRemnantCleanupRequiresMarkerOrEmptyDirectory(t *testing.T) {
+	candidate := remoteEvaluationPlan()
+	credentials := Credentials{SSHPassword: "runtime-only"}
+
+	owned := newFakeRemoteHost()
+	ownedAdapter := newRemoteLinuxCompose(func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error) { return owned, nil })
+	if err := ownedAdapter.Apply(context.Background(), lifecycle.Install, candidate, "", stagedRemoteBundle(t), lifecycle.OperationBackups{}, credentials); err != nil {
+		t.Fatal(err)
+	}
+	if err := ownedAdapter.CleanupRemnant(context.Background(), candidate, credentials); err != nil {
+		t.Fatal(err)
+	}
+	if owned.directory || owned.resources || !owned.composeDown {
+		t.Fatal("marker-owned remnant was not removed")
+	}
+
+	empty := newFakeRemoteHost()
+	empty.directory = true
+	emptyAdapter := newRemoteLinuxCompose(func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error) { return empty, nil })
+	if err := emptyAdapter.CleanupRemnant(context.Background(), candidate, credentials); err != nil || empty.directory {
+		t.Fatalf("empty dedicated directory was not removed: %v", err)
+	}
+
+	legacy := newFakeRemoteHost()
+	legacy.directory = true
+	for _, name := range []string{"compose.yaml", "ranch-hand.override.yaml", ".env", remoteMarkerName} {
+		legacy.files[name] = []byte{}
+	}
+	legacyAdapter := newRemoteLinuxCompose(func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error) { return legacy, nil })
+	if err := legacyAdapter.CleanupRemnant(context.Background(), candidate, credentials); err != nil || legacy.directory {
+		t.Fatalf("exact legacy empty-marker remnant was not removed: %v", err)
+	}
+
+	legacy.directory = true
+	legacy.files = map[string][]byte{"compose.yaml": []byte("changed"), "ranch-hand.override.yaml": {}, ".env": {}, remoteMarkerName: {}}
+	if err := legacyAdapter.CleanupRemnant(context.Background(), candidate, credentials); err == nil || !legacy.directory {
+		t.Fatal("non-empty legacy marker pattern was removed or accepted")
+	}
+
+	unknown := newFakeRemoteHost()
+	unknown.directory = true
+	unknown.files["keep-me"] = []byte("not Ranch Hand content")
+	unknownAdapter := newRemoteLinuxCompose(func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error) { return unknown, nil })
+	if err := unknownAdapter.CleanupRemnant(context.Background(), candidate, credentials); err == nil || !unknown.directory || len(unknown.files) != 1 {
+		t.Fatal("unknown markerless directory was removed or accepted")
 	}
 }
 

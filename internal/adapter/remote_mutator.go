@@ -328,6 +328,60 @@ func (a *RemoteLinuxCompose) Recover(ctx context.Context, kind lifecycle.Operati
 		}
 		return errors.New("refusing remote cleanup without the exact Ranch Hand ownership marker")
 	}
+	return cleanupOwnedRemote(ctx, host, candidate, marker)
+}
+
+func (a *RemoteLinuxCompose) CleanupRemnant(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) error {
+	host, err := a.connect(ctx, candidate, credentials)
+	if err != nil {
+		return err
+	}
+	defer host.Close()
+	marker, err := readRemoteMarker(ctx, host, candidate)
+	if err == nil {
+		return cleanupOwnedRemote(ctx, host, candidate, marker)
+	}
+	if errors.Is(err, errRemoteMarkerEmpty) {
+		if recoverLegacyEmptyRemoteRemnant(ctx, host, candidate) == nil {
+			return nil
+		}
+		return errors.New("refusing orphan cleanup because the legacy empty-marker directory contains unknown content or Docker resources")
+	}
+	if errors.Is(err, errRemoteMarkerUnavailable) {
+		if err := verifyNoRemoteProjectResources(ctx, host, candidate); err != nil {
+			return errors.New("refusing orphan cleanup because Docker resources exist for this project")
+		}
+		directory := candidate.Configuration["installDirectory"]
+		command := "if [ ! -e " + shellQuote(directory) + " ]; then exit 0; fi; test -d " + shellQuote(directory) + " && test ! -L " + shellQuote(directory) + " && rmdir -- " + shellQuote(directory)
+		if _, cleanupErr := host.Run(ctx, command, nil); cleanupErr == nil {
+			return nil
+		}
+		return errors.New("refusing orphan cleanup without an exact ownership marker because the directory is not empty")
+	}
+	return errors.New("refusing orphan cleanup because the Ranch Hand ownership marker is invalid or does not match this deployment")
+}
+
+func recoverLegacyEmptyRemoteRemnant(ctx context.Context, host remoteHost, candidate plan.DeploymentPlan) error {
+	if err := verifyNoRemoteProjectResources(ctx, host, candidate); err != nil {
+		return err
+	}
+	directory := candidate.Configuration["installDirectory"]
+	files := []string{"compose.yaml", "ranch-hand.override.yaml", ".env", remoteMarkerName}
+	command := "test -d " + shellQuote(directory) + " && test ! -L " + shellQuote(directory)
+	for _, name := range files {
+		path := shellQuote(directory + "/" + name)
+		command += " && test -f " + path + " && test ! -L " + path + " && test ! -s " + path
+	}
+	command += " && rm --force --"
+	for _, name := range files {
+		command += " " + shellQuote(directory+"/"+name)
+	}
+	command += " && rmdir -- " + shellQuote(directory)
+	_, err := host.Run(ctx, command, nil)
+	return err
+}
+
+func cleanupOwnedRemote(ctx context.Context, host remoteHost, candidate plan.DeploymentPlan, marker remoteInstallation) error {
 	if err := verifyRemoteFiles(ctx, host, candidate, marker); err != nil {
 		return errors.New("refusing remote cleanup because deployment files changed")
 	}
@@ -365,14 +419,8 @@ func (a *RemoteLinuxCompose) Recover(ctx context.Context, kind lifecycle.Operati
 }
 
 func recoverRemoteBeforeMarker(ctx context.Context, host remoteHost, candidate plan.DeploymentPlan, removeEmptyMarker bool) error {
-	project := candidate.Configuration["projectName"]
-	containerIDs, err := host.Run(ctx, "docker ps --all --quiet --filter "+shellQuote("name=^/"+project+"-server$"), nil)
-	if err != nil || containerIDs != "" {
-		return errors.New("pre-marker recovery found a Compose container")
-	}
-	volumeIDs, err := host.Run(ctx, "docker volume ls --quiet --filter "+shellQuote("name=^"+project+"-data$"), nil)
-	if err != nil || volumeIDs != "" {
-		return errors.New("pre-marker recovery found a Compose volume")
+	if err := verifyNoRemoteProjectResources(ctx, host, candidate); err != nil {
+		return err
 	}
 	directory := candidate.Configuration["installDirectory"]
 	markerCleanup := ""
@@ -386,8 +434,21 @@ func recoverRemoteBeforeMarker(ctx context.Context, host remoteHost, candidate p
 		shellQuote(directory+"/ranch-hand.override.yaml") + " " + shellQuote(directory+"/ranch-hand.override.yaml.ranch-hand-tmp") + " " +
 		shellQuote(directory+"/.env") + " " + shellQuote(directory+"/.env.ranch-hand-tmp") + " " +
 		shellQuote(directory+"/"+remoteMarkerName+".ranch-hand-tmp") + " && rmdir -- " + shellQuote(directory)
-	_, err = host.Run(ctx, command, nil)
+	_, err := host.Run(ctx, command, nil)
 	return err
+}
+
+func verifyNoRemoteProjectResources(ctx context.Context, host remoteHost, candidate plan.DeploymentPlan) error {
+	project := candidate.Configuration["projectName"]
+	containerIDs, err := host.Run(ctx, "docker ps --all --quiet --filter "+shellQuote("name=^/"+project+"-server$"), nil)
+	if err != nil || containerIDs != "" {
+		return errors.New("pre-marker recovery found a Compose container")
+	}
+	volumeIDs, err := host.Run(ctx, "docker volume ls --quiet --filter "+shellQuote("name=^"+project+"-data$"), nil)
+	if err != nil || volumeIDs != "" {
+		return errors.New("pre-marker recovery found a Compose volume")
+	}
+	return nil
 }
 
 func boundedCommandFailure(output string) string {

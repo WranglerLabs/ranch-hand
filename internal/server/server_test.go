@@ -30,6 +30,9 @@ type fakeReleaseVerifier struct {
 
 type fakeTargetPreflighter struct {
 	credentials adapter.Credentials
+	report      adapter.Report
+	cleaned     plan.DeploymentPlan
+	cleanupErr  error
 }
 
 type fakeBundleStager struct {
@@ -109,7 +112,15 @@ func (f *fakeBundleStager) Stage(artifact productrelease.VerifiedArtifact) (bund
 
 func (f *fakeTargetPreflighter) Preflight(_ context.Context, candidate plan.DeploymentPlan, credentials adapter.Credentials) adapter.Report {
 	f.credentials = credentials
+	if f.report.Checks != nil {
+		return f.report
+	}
 	return adapter.Report{Ready: true, Target: candidate.Target.Kind, Checks: []adapter.Check{{Name: "native-api", OK: true, Message: "connected"}}}
+}
+
+func (f *fakeTargetPreflighter) CleanupRemnant(_ context.Context, candidate plan.DeploymentPlan, _ adapter.Credentials) error {
+	f.cleaned = candidate
+	return f.cleanupErr
 }
 
 func (f *fakeReleaseVerifier) VerifyAndCache(_ context.Context, request productrelease.Request) (productrelease.VerifiedArtifact, error) {
@@ -339,7 +350,7 @@ func TestTargetPreflightRecognizesInterruptedAndExistingLifecycleState(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	blocked := adapter.Report{Target: candidate.Target.Kind, Checks: []adapter.Check{{Name: "wsl-compose-boundary", Message: "directory exists"}}}
+	blocked := adapter.Report{Target: candidate.Target.Kind, Checks: []adapter.Check{{Name: "wsl-directory-boundary", Message: "directory exists"}}}
 
 	interrupted := &fakeInstallationReader{active: []lifecycle.Journal{{DeploymentID: deploymentID, Kind: lifecycle.Install, Phase: lifecycle.Staged}}}
 	server := &Server{installations: interrupted}
@@ -353,6 +364,46 @@ func TestTargetPreflightRecognizesInterruptedAndExistingLifecycleState(t *testin
 	report = server.annotateLifecycleTarget(candidate, blocked)
 	if report.State != "already-installed" || report.DeploymentID != deploymentID || report.Ready || !strings.Contains(report.Checks[0].Message, "active installation record") {
 		t.Fatalf("existing installation was not surfaced safely: %#v", report)
+	}
+
+	server.installations = &fakeInstallationReader{}
+	report = server.annotateLifecycleTarget(candidate, blocked)
+	if report.State != "orphan-cleanup-available" || report.DeploymentID != deploymentID || report.Ready || !strings.Contains(report.Checks[0].Message, "Inspect and remove Ranch Hand remnants") {
+		t.Fatalf("orphaned WSL remnant was not surfaced with cleanup: %#v", report)
+	}
+}
+
+func TestTargetRemnantCleanupRequiresVerifiedOrphanedWSLPlan(t *testing.T) {
+	artifact := t.TempDir() + string(os.PathSeparator) + "bundle.tar.gz"
+	if err := os.WriteFile(artifact, []byte("bundle"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	verifier := &fakeReleaseVerifier{cachePath: artifact}
+	targets := &fakeTargetPreflighter{report: adapter.Report{Target: "local-wsl-compose", Checks: []adapter.Check{{Name: "wsl-directory-boundary", OK: false, Message: "directory exists"}}}}
+	h := newWithServices("secret-token", "test", testUI(), verifier, targets, nil, nil, &fakeInstallationReader{}, nil)
+	manifest := "https://github.com/WranglerLabs/repo-wrangler/releases/download/v1.2.3/release-manifest.json"
+	response := authorizedPost(h, "/api/v1/releases/verify", `{"manifestUrl":"`+manifest+`","version":"v1.2.3","target":"local-wsl-compose"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("verification returned %d: %s", response.Code, response.Body.String())
+	}
+	response = authorizedPost(h, "/api/v1/plans/create", `{"name":"WSL Wrangler","version":"v1.2.3","target":"local-wsl-compose","configuration":{"distribution":"Ubuntu","projectName":"repo-wrangler-ranch-hand"}}`)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("plan creation returned %d: %s", response.Code, response.Body.String())
+	}
+	var created struct {
+		Plan json.RawMessage `json:"plan"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"plan":` + string(created.Plan) + `,"credentials":{}}`
+	response = authorizedPost(h, "/api/v1/targets/preflight", body)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"state":"orphan-cleanup-available"`) {
+		t.Fatalf("orphan preflight did not expose cleanup: %d %s", response.Code, response.Body.String())
+	}
+	response = authorizedPost(h, "/api/v1/targets/remnants/cleanup", body)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"cleaned":true`) || targets.cleaned.Target.Kind != "local-wsl-compose" {
+		t.Fatalf("verified orphan cleanup was not routed: %d %s", response.Code, response.Body.String())
 	}
 }
 

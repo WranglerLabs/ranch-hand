@@ -73,7 +73,11 @@ func (a *WSLCompose) Preflight(ctx context.Context, candidate plan.DeploymentPla
 		return report
 	}
 	if err := remoteBoundaryAvailable(ctx, host, normalized); err != nil {
-		appendCheck(&report, "wsl-compose-boundary", false, wslBoundaryMessage(candidate.Configuration["projectName"], err))
+		name := "wsl-compose-boundary"
+		if errors.Is(err, errComposeInstallDirectoryExists) {
+			name = "wsl-directory-boundary"
+		}
+		appendCheck(&report, name, false, wslBoundaryMessage(candidate.Configuration["projectName"], err))
 		return report
 	}
 	appendCheck(&report, "wsl-compose-boundary", true, "The Compose project and Ranch Hand installation directory are unused.")
@@ -153,4 +157,12 @@ func (a *WSLCompose) Recover(ctx context.Context, kind lifecycle.OperationKind, 
 		return err
 	}
 	return a.delegate.Recover(ctx, kind, normalized, fromVersion, backups, credentials)
+}
+
+func (a *WSLCompose) CleanupRemnant(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) error {
+	normalized, err := a.normalized(ctx, candidate)
+	if err != nil {
+		return err
+	}
+	return a.delegate.CleanupRemnant(ctx, normalized, credentials)
 }

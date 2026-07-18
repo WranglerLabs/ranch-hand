@@ -254,13 +254,8 @@ func (p DeploymentPlan) Validate() error {
 		}
 	}
 	if p.Target.Kind == "remote-linux-compose" {
-		host := p.Configuration["host"]
-		if net.ParseIP(host) == nil && !remoteHostPattern.MatchString(host) {
-			return errors.New("remote-linux-compose host must be an IP address or DNS hostname")
-		}
-		port, err := strconv.Atoi(p.Configuration["port"])
-		if err != nil || port < 1 || port > 65535 {
-			return errors.New("remote-linux-compose port must be from 1 through 65535")
+		if err := ValidateRemoteSSHEndpoint(p.Configuration["host"], p.Configuration["port"]); err != nil {
+			return err
 		}
 		if !remoteUserPattern.MatchString(p.Configuration["user"]) {
 			return errors.New("remote-linux-compose user must be a safe Linux account name")
@@ -280,6 +275,19 @@ func (p DeploymentPlan) Validate() error {
 		if !sshFingerprintPattern.MatchString(p.Configuration["hostKeySha256"]) {
 			return errors.New("remote-linux-compose hostKeySha256 must be an SHA-256 SSH fingerprint")
 		}
+	}
+	return nil
+}
+
+// ValidateRemoteSSHEndpoint applies the same strict address validation used by
+// deployment plans before Ranch Hand makes a host-key inspection connection.
+func ValidateRemoteSSHEndpoint(host, portValue string) error {
+	if net.ParseIP(host) == nil && !remoteHostPattern.MatchString(host) {
+		return errors.New("remote-linux-compose host must be an IP address or DNS hostname")
+	}
+	port, err := strconv.Atoi(portValue)
+	if err != nil || port < 1 || port > 65535 {
+		return errors.New("remote-linux-compose port must be from 1 through 65535")
 	}
 	return nil
 }

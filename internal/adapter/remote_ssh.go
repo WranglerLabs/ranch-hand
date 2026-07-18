@@ -29,6 +29,44 @@ type RemoteLinuxCompose struct {
 	connect remoteConnector
 }
 
+type SSHHostIdentity struct {
+	Algorithm   string `json:"algorithm"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+var errSSHHostKeyCaptured = errors.New("SSH host key captured")
+
+// InspectSSHHostKey reads the identity presented by an SSH service without
+// sending user credentials. The caller must verify this first-seen fingerprint
+// through a trusted server console or administrator before pinning it.
+func InspectSSHHostKey(ctx context.Context, host, port string) (SSHHostIdentity, error) {
+	if err := plan.ValidateRemoteSSHEndpoint(host, port); err != nil {
+		return SSHHostIdentity{}, err
+	}
+	address := net.JoinHostPort(host, port)
+	dialer := &net.Dialer{Timeout: 30 * time.Second}
+	connection, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return SSHHostIdentity{}, errors.New("Ranch Hand could not reach the remote SSH service")
+	}
+	defer connection.Close()
+	_ = connection.SetDeadline(time.Now().Add(30 * time.Second))
+	var identity SSHHostIdentity
+	config := &ssh.ClientConfig{
+		User: "ranch-hand-host-key-inspection",
+		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+			identity = SSHHostIdentity{Algorithm: key.Type(), Fingerprint: ssh.FingerprintSHA256(key)}
+			return errSSHHostKeyCaptured
+		},
+		Timeout: 30 * time.Second,
+	}
+	_, _, _, _ = ssh.NewClientConn(connection, address, config)
+	if identity.Fingerprint == "" {
+		return SSHHostIdentity{}, errors.New("the remote service did not present a supported SSH host key")
+	}
+	return identity, nil
+}
+
 func NewRemoteLinuxCompose() *RemoteLinuxCompose {
 	return &RemoteLinuxCompose{connect: connectRemoteLinux}
 }

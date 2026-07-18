@@ -27,6 +27,7 @@ var (
 	errComposeInstallDirectoryExists = errors.New("refusing to replace a pre-existing Compose installation directory")
 	errComposeContainersExist        = errors.New("refusing to replace a Compose project with existing containers")
 	errComposeVolumesExist           = errors.New("refusing to replace a Compose project with existing volumes")
+	errRemoteMarkerUnavailable       = errors.New("remote Ranch Hand ownership marker is unavailable")
 )
 
 type remoteInstallation struct {
@@ -192,7 +193,7 @@ func readRemoteMarker(ctx context.Context, host remoteHost, candidate plan.Deplo
 	directory := candidate.Configuration["installDirectory"]
 	contents, err := host.Run(ctx, "cat -- "+shellQuote(directory+"/"+remoteMarkerName), nil)
 	if err != nil {
-		return remoteInstallation{}, errors.New("remote Ranch Hand ownership marker is unavailable")
+		return remoteInstallation{}, errRemoteMarkerUnavailable
 	}
 	var marker remoteInstallation
 	decoder := json.NewDecoder(strings.NewReader(contents))
@@ -305,9 +306,7 @@ func (a *RemoteLinuxCompose) Recover(ctx context.Context, kind lifecycle.Operati
 	defer host.Close()
 	marker, err := readRemoteMarker(ctx, host, candidate)
 	if err != nil {
-		directory := candidate.Configuration["installDirectory"]
-		removeEmpty := "if [ ! -e " + shellQuote(directory) + " ]; then exit 0; fi; rmdir -- " + shellQuote(directory)
-		if _, removeErr := host.Run(ctx, removeEmpty, nil); removeErr == nil {
+		if errors.Is(err, errRemoteMarkerUnavailable) && recoverRemoteBeforeMarker(ctx, host, candidate) == nil {
 			return nil
 		}
 		return errors.New("refusing remote cleanup without the exact Ranch Hand ownership marker")
@@ -343,4 +342,25 @@ func (a *RemoteLinuxCompose) Recover(ctx context.Context, kind lifecycle.Operati
 		return fmt.Errorf("remove owned failed-install remote directory: %w", err)
 	}
 	return nil
+}
+
+func recoverRemoteBeforeMarker(ctx context.Context, host remoteHost, candidate plan.DeploymentPlan) error {
+	project := candidate.Configuration["projectName"]
+	containerIDs, err := host.Run(ctx, "docker ps --all --quiet --filter "+shellQuote("name=^/"+project+"-server$"), nil)
+	if err != nil || containerIDs != "" {
+		return errors.New("pre-marker recovery found a Compose container")
+	}
+	volumeIDs, err := host.Run(ctx, "docker volume ls --quiet --filter "+shellQuote("name=^"+project+"-data$"), nil)
+	if err != nil || volumeIDs != "" {
+		return errors.New("pre-marker recovery found a Compose volume")
+	}
+	directory := candidate.Configuration["installDirectory"]
+	command := "if [ ! -e " + shellQuote(directory) + " ]; then exit 0; fi; " +
+		"test -d " + shellQuote(directory) + " && test ! -L " + shellQuote(directory) + " && rm --force -- " +
+		shellQuote(directory+"/compose.yaml") + " " + shellQuote(directory+"/compose.yaml.ranch-hand-tmp") + " " +
+		shellQuote(directory+"/ranch-hand.override.yaml") + " " + shellQuote(directory+"/ranch-hand.override.yaml.ranch-hand-tmp") + " " +
+		shellQuote(directory+"/.env") + " " + shellQuote(directory+"/.env.ranch-hand-tmp") + " " +
+		shellQuote(directory+"/"+remoteMarkerName+".ranch-hand-tmp") + " && rmdir -- " + shellQuote(directory)
+	_, err = host.Run(ctx, command, nil)
+	return err
 }

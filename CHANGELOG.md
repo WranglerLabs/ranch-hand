@@ -6,6 +6,31 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.8] - 2026-07-17
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- Extended failed-install cleanup to the partial pre-marker transfer state. It
+  removes only Ranch Hand's seven fixed final/temporary filenames, only when no
+  Compose container or volume exists, and requires the private directory to be
+  empty afterward. Unknown content, symlinks, invalid markers, and Docker
+  resources remain hard stops.
+- Invalidated the bound plan, staged bundle, live preflight, and confirmation
+  whenever a deployment input changes. The UI can no longer display a new
+  Compose project while submitting the previous project's plan and lock ID.
+- Bound WSL progress and install summaries to the exact immutable plan being
+  submitted rather than mutable form fields.
+
+### Added
+
+- Added a Ranch Hand **Managed deployments** inventory with target, project,
+  version, state, last update, and the local WSL endpoint.
+- Renamed local WSL recovery to **Remove failed installation and release lock**
+  so its ownership-checked cleanup behavior is explicit.
+
 ## [0.1.0-rc.7] - 2026-07-17
 
 **Classification: Public Preview.** Publicly downloadable and intended for

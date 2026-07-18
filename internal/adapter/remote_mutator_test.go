@@ -88,9 +88,13 @@ func (h *fakeRemoteHost) Run(_ context.Context, command string, stdin []byte) (s
 		if !h.directory {
 			return "", nil
 		}
-		if len(h.files) != 0 {
-			return "", errors.New("directory is not empty")
+		for name := range h.files {
+			known := name == "compose.yaml" || name == "compose.yaml.ranch-hand-tmp" || name == "ranch-hand.override.yaml" || name == "ranch-hand.override.yaml.ranch-hand-tmp" || name == ".env" || name == ".env.ranch-hand-tmp" || name == remoteMarkerName+".ranch-hand-tmp"
+			if !known {
+				return "", errors.New("directory contains unknown content")
+			}
 		}
+		h.files = make(map[string][]byte)
 		h.directory = false
 		return "", nil
 	case strings.HasPrefix(command, "sha256sum -- "):
@@ -229,8 +233,24 @@ func TestRemoteRecoveryRemovesOnlyEmptyPreMarkerDirectory(t *testing.T) {
 	}
 
 	host.directory = true
+	host.files["compose.yaml"] = []byte("partial Ranch Hand transfer")
+	host.files[".env.ranch-hand-tmp"] = []byte("partial Ranch Hand transfer")
+	if err := adapter.Recover(context.Background(), lifecycle.Install, remoteEvaluationPlan(), "", lifecycle.OperationBackups{}, Credentials{SSHPassword: "runtime-only"}); err != nil {
+		t.Fatal(err)
+	}
+	if host.directory || len(host.files) != 0 {
+		t.Fatal("pre-marker recovery did not remove the fixed partial-transfer files")
+	}
+
+	host.directory = true
 	host.files["unknown"] = []byte("do not remove")
 	if err := adapter.Recover(context.Background(), lifecycle.Install, remoteEvaluationPlan(), "", lifecycle.OperationBackups{}, Credentials{SSHPassword: "runtime-only"}); err == nil || !host.directory || len(host.files) != 1 {
 		t.Fatal("pre-marker recovery removed or accepted a non-empty directory")
+	}
+
+	host.files = make(map[string][]byte)
+	host.resources = true
+	if err := adapter.Recover(context.Background(), lifecycle.Install, remoteEvaluationPlan(), "", lifecycle.OperationBackups{}, Credentials{SSHPassword: "runtime-only"}); err == nil || !host.directory || !host.resources {
+		t.Fatal("pre-marker recovery accepted a project with Docker resources")
 	}
 }

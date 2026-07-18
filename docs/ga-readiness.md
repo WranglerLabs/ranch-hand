@@ -1,6 +1,6 @@
 # Ranch Hand GA readiness
 
-Ranch Hand `v0.1.0-rc.7` is a **Public Preview**. It is the primary recommended
+Ranch Hand `v0.1.0-rc.8` is a **Public Preview**. It is the primary recommended
 way for a Windows operator to begin a RepoWrangler deployment without cloning
 source. The manual RepoWrangler recipes remain supported for contributors,
 custom automation, production topologies not yet covered by Ranch Hand, and

@@ -6,6 +6,19 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.5] - 2026-07-17
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- Made an unchecked WSL install confirmation produce a visible instruction
+  instead of leaving a silently disabled button.
+- Added an immediate WSL installation status message and one-second lifecycle
+  journal polling while Docker pulls, creates, starts, and verifies the target.
+- Enabled credential-free recovery controls for interrupted local WSL operations.
+
 ## [0.1.0-rc.4] - 2026-07-17
 
 **Classification: Public Preview.** Publicly downloadable and intended for

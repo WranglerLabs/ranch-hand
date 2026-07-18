@@ -27,6 +27,8 @@ label { display: grid; gap: 8px; color: #9fc4ad; font-size: .78rem; font-weight:
 input, select { width: 100%; min-height: 46px; padding: 10px 12px; border: 1px solid #3b5c49; border-radius: 10px; color: #eaf4ee; background: #0b1210; font: inherit; }
 button { min-height: 46px; padding: 0 18px; border: 0; border-radius: 10px; color: #172018; background: #e3a23b; font-weight: 900; cursor: pointer; }
 button:disabled { cursor: wait; opacity: .65; }
+.operation-progress { color: #dbe9df; }
+.operation-warning { color: #ffd69a; font-weight: 700; }
 .button-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
 button.secondary { border: 1px solid #52725e; color: #eaf4ee; background: transparent; }
 .inline-result { margin-top: 18px; padding: 18px; border: 1px solid #345845; border-radius: 12px; background: #122019; }

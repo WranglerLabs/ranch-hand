@@ -41,6 +41,7 @@ type BackupRecord = { backupId: string; deploymentId: string; target: string; ve
 type ActiveOperation = { deploymentId: string; operationId: string; kind: string; target: string; fromVersion?: string; toVersion: string; phase: string; updatedAt: string };
 type RollbackPoolEntry = { backupId: string; version: string; createdAt: string; containerName: string; volumeName: string };
 type DiscoveredRelease = { version: string; manifestUrl: string; prerelease: boolean };
+type SSHHostIdentity = { algorithm: string; fingerprint: string };
 
 const targetFields: Record<string, { key: string; label: string; placeholder: string; optional?: boolean }[]> = {
   "azure-container-apps": [
@@ -179,8 +180,18 @@ function App() {
   const [rollbackKeepLatest, setRollbackKeepLatest] = useState(1);
   const [rollbackPruneConfirmed, setRollbackPruneConfirmed] = useState(false);
   const [rollbackPruning, setRollbackPruning] = useState(false);
+  const [hostKeyInspecting, setHostKeyInspecting] = useState(false);
+  const [hostKeyIdentity, setHostKeyIdentity] = useState<SSHHostIdentity | null>(null);
+  const [hostKeyVerified, setHostKeyVerified] = useState(false);
+  const [hostKeyError, setHostKeyError] = useState("");
 
   function changeConfiguration(next: Record<string, string>) {
+    if (target === "remote-linux-compose" && (next.host !== configuration.host || next.port !== configuration.port)) {
+      next = { ...next, hostKeySha256: "" };
+      setHostKeyIdentity(null);
+      setHostKeyVerified(false);
+      setHostKeyError("");
+    }
     setConfiguration(next);
     setPlanResult(null);
     setPreflight(null);
@@ -191,6 +202,24 @@ function App() {
     setWSLInstallMessage("");
     setOperationResult(null);
     setOperationKind(null);
+  }
+
+  async function inspectRemoteHostKey() {
+    setHostKeyInspecting(true);
+    setHostKeyIdentity(null);
+    setHostKeyVerified(false);
+    setHostKeyError("");
+    try {
+      const result = await api<{ identity: SSHHostIdentity }>("/api/v1/targets/remote-linux/host-key", {
+        method: "POST",
+        body: JSON.stringify({ host: configuration.host || "", port: configuration.port || "22" }),
+      });
+      setHostKeyIdentity(result.identity);
+    } catch (reason) {
+      setHostKeyError(reason instanceof Error ? reason.message : "SSH host-key inspection failed");
+    } finally {
+      setHostKeyInspecting(false);
+    }
   }
 
   useEffect(() => {
@@ -724,7 +753,7 @@ function App() {
         <p>Only non-secret identifiers and locations belong here. Ranch Hand binds the exported plan to the exact verified manifest and artifact digests; credentials are requested only when an operation needs them.</p>
         <form className="plan-form" onSubmit={createPlan}>
           <label>Deployment name<input required maxLength={120} value={deploymentName} onChange={(event) => { setDeploymentName(event.target.value); changeConfiguration(configuration); }} /></label>
-          {targetFields[target].map((field) => <label key={field.key}>{field.label}{field.optional ? " (optional)" : ""}{field.key === "distribution" ? <select required value={configuration.distribution || ""} onChange={(event) => changeConfiguration({ ...configuration, distribution: event.target.value })}><option value="">Select an installed WSL distribution</option>{wslDistributions.map((distribution) => <option key={distribution} value={distribution}>{distribution}</option>)}</select> : <input required={!field.optional} placeholder={field.placeholder} value={configuration[field.key] || ""} onChange={(event) => {
+          {targetFields[target].filter((field) => field.key !== "hostKeySha256").map((field) => <label key={field.key}>{field.label}{field.optional ? " (optional)" : ""}{field.key === "distribution" ? <select required value={configuration.distribution || ""} onChange={(event) => changeConfiguration({ ...configuration, distribution: event.target.value })}><option value="">Select an installed WSL distribution</option>{wslDistributions.map((distribution) => <option key={distribution} value={distribution}>{distribution}</option>)}</select> : <input required={!field.optional} placeholder={field.placeholder} value={configuration[field.key] || ""} onChange={(event) => {
             const value = event.target.value;
             if (target === "remote-linux-compose" && field.key === "user") {
               const previousDefault = remoteInstallDirectory(configuration.user || "");
@@ -735,6 +764,7 @@ function App() {
             }
             changeConfiguration({ ...configuration, [field.key]: value });
           }} />}</label>)}
+          {target === "remote-linux-compose" && <div className="inline-result install-panel"><strong>Verify the SSH server identity</strong><p>Your username and password authenticate you to Linux. This fingerprint authenticates the Linux server to Ranch Hand before any password is sent.</p><label>Pinned SSH host key<input required placeholder="SHA256:..." value={configuration.hostKeySha256 || ""} onChange={(event) => { setHostKeyIdentity(null); setHostKeyVerified(false); setHostKeyError(""); changeConfiguration({ ...configuration, hostKeySha256: event.target.value }); }} /></label><button type="button" className="secondary" disabled={hostKeyInspecting || !configuration.host || !configuration.port} onClick={inspectRemoteHostKey}>{hostKeyInspecting ? "Inspecting SSH service…" : "Inspect server host key"}</button>{hostKeyIdentity && <div className="inline-result"><strong>Server presented {hostKeyIdentity.algorithm}</strong><p className="digest">{hostKeyIdentity.fingerprint}</p><p>Confirm this fingerprint matches the value shown by the Azure VM console, server console, or your administrator. First-seen inspection alone cannot detect an interception.</p><label className="confirmation"><input type="checkbox" checked={hostKeyVerified} onChange={(event) => setHostKeyVerified(event.target.checked)} /> I verified this fingerprint through a trusted source.</label><button type="button" disabled={!hostKeyVerified} onClick={() => changeConfiguration({ ...configuration, hostKeySha256: hostKeyIdentity.fingerprint })}>Use verified fingerprint</button></div>}{hostKeyError && <p className="operation-warning" role="alert">{hostKeyError}</p>}</div>}
           {target === "local-wsl-compose" && <label className="confirmation"><input type="checkbox" checked={configuration.demoMode === "true"} onChange={(event) => changeConfiguration({ ...configuration, demoMode: event.target.checked ? "true" : "false" })} /> Demo mode — use mock data instead of connecting real repositories.</label>}
           {target === "local-wsl-compose" && <p>{configuration.demoMode === "true" ? "Demo mode is optional and uses mock data without provider setup." : "Real mode is selected. Ranch Hand will generate the local session and encryption secrets, then RepoWrangler will guide you through first-run provider setup."}</p>}
           <button type="submit">Create bound plan</button>

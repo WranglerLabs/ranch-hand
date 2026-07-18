@@ -6,6 +6,32 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.15] - 2026-07-18
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Added
+
+- Remote Linux setup can inspect the SSH service's presented host-key
+  algorithm and SHA-256 fingerprint without sending user credentials or
+  requiring OpenSSH on Windows.
+- The guided flow explains the separate roles of server identity and Linux
+  username/password or private-key authentication, requires explicit
+  out-of-band verification, and then fills the pinned fingerprint.
+
+### Security
+
+- Changing the remote host or SSH port clears the inspected identity and
+  existing pin so a fingerprint cannot be reused for a different endpoint.
+- Ranch Hand does not silently trust a first-seen key; operators are directed
+  to compare it with the Azure/server console or server administrator.
+
+### Verification
+
+- Go plan, adapter, and server tests pass.
+- The React application passes TypeScript checking and production build.
+
 ## [0.1.0-rc.14] - 2026-07-18
 
 **Classification: Public Preview.** Publicly downloadable and intended for

@@ -107,6 +107,25 @@ func TestValidatesRemoteLinuxBoundary(t *testing.T) {
 	}
 }
 
+func TestValidateRemoteSSHEndpoint(t *testing.T) {
+	for _, candidate := range []struct {
+		host string
+		port string
+		ok   bool
+	}{
+		{host: "vm.example.com", port: "22", ok: true},
+		{host: "10.0.0.4", port: "2222", ok: true},
+		{host: "bad host", port: "22", ok: false},
+		{host: "vm.example.com", port: "0", ok: false},
+		{host: "vm.example.com", port: "not-a-port", ok: false},
+	} {
+		err := ValidateRemoteSSHEndpoint(candidate.host, candidate.port)
+		if (err == nil) != candidate.ok {
+			t.Fatalf("ValidateRemoteSSHEndpoint(%q, %q) error = %v, want ok=%v", candidate.host, candidate.port, err, candidate.ok)
+		}
+	}
+}
+
 func TestRejectsUnknownConfigurationField(t *testing.T) {
 	var candidate DeploymentPlan
 	if err := json.Unmarshal([]byte(validPlan), &candidate); err != nil {

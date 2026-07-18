@@ -135,6 +135,7 @@ func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, 
 	mux.Handle("POST /api/v1/targets/preflight", s.authorize(http.HandlerFunc(s.preflightTarget)))
 	mux.Handle("POST /api/v1/targets/remnants/cleanup", s.authorize(http.HandlerFunc(s.cleanupTargetRemnant)))
 	mux.Handle("GET /api/v1/targets/wsl-distributions", s.authorize(http.HandlerFunc(s.wslDistributions)))
+	mux.Handle("POST /api/v1/targets/remote-linux/host-key", s.authorize(http.HandlerFunc(s.inspectRemoteLinuxHostKey)))
 	mux.Handle("POST /api/v1/bundles/stage", s.authorize(http.HandlerFunc(s.stageBundle)))
 	mux.Handle("POST /api/v1/operations/run", s.authorize(http.HandlerFunc(s.runOperation)))
 	mux.Handle("GET /api/v1/operations/active", s.authorize(http.HandlerFunc(s.listActiveOperations)))
@@ -148,6 +149,29 @@ func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, 
 	mux.Handle("GET /api/v1/releases/recommended", s.authorize(http.HandlerFunc(s.recommendedRelease)))
 	mux.Handle("/", s.spa())
 	return s.securityHeaders(mux)
+}
+
+func (s *Server) inspectRemoteLinuxHostKey(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request rejected"})
+		return
+	}
+	var request struct {
+		Host string `json:"host"`
+		Port string `json:"port"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxReleaseRequestSize))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid SSH host-key inspection request"})
+		return
+	}
+	identity, err := adapter.InspectSSHHostKey(r.Context(), strings.TrimSpace(request.Host), strings.TrimSpace(request.Port))
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"identity": identity})
 }
 
 func (s *Server) wslDistributions(w http.ResponseWriter, r *http.Request) {

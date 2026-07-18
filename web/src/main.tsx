@@ -189,6 +189,9 @@ function App() {
   const [hostKeyInspecting, setHostKeyInspecting] = useState(false);
   const [hostKeyIdentity, setHostKeyIdentity] = useState<SSHHostIdentity | null>(null);
   const [hostKeyError, setHostKeyError] = useState("");
+  const [removalConfirmations, setRemovalConfirmations] = useState<Record<string, boolean>>({});
+  const [removingDeployment, setRemovingDeployment] = useState("");
+  const [removalMessage, setRemovalMessage] = useState("");
 
   function changeConfiguration(next: Record<string, string>) {
     if (target === "remote-linux-compose" && (next.host !== configuration.host || next.port !== configuration.port)) {
@@ -273,6 +276,25 @@ function App() {
       setInstallations(result.installations);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Installation inventory failed");
+    }
+  }
+
+  async function uninstallWSLDeployment(record: InstallationRecord) {
+    setRemovingDeployment(record.deploymentId);
+    setRemovalMessage("Removing the owned WSL Compose project, its persistent data volume, and its installation directory. Keep Ranch Hand open.");
+    try {
+      await api<{ completed: boolean }>(`/api/v1/installations/${record.deploymentId}/uninstall`, {
+        method: "POST",
+        body: JSON.stringify({ confirmed: true, deleteData: true, credentials: {} }),
+      });
+      setRemovalConfirmations((current) => ({ ...current, [record.deploymentId]: false }));
+      setRemovalMessage("The WSL deployment and its persistent data were removed. Ranch Hand cleared the active installation record.");
+      await refreshInstallations();
+      await refreshActiveOperations();
+    } catch (reason) {
+      setRemovalMessage(reason instanceof Error ? reason.message : "Managed WSL removal failed");
+    } finally {
+      setRemovingDeployment("");
     }
   }
 
@@ -786,7 +808,8 @@ function App() {
       {error && <section className="notice error" role="alert"><strong>Session unavailable</strong><p>{error}</p></section>}
       {status && <section className="notice success"><strong>Local control service is ready</strong><dl><div><dt>Version</dt><dd>{status.version}</dd></div><div><dt>API</dt><dd>{status.apiVersion}</dd></div><div><dt>Platform</dt><dd>{status.platform}</dd></div></dl><button type="button" className="secondary" onClick={exportDiagnostics}>Export redacted diagnostics</button></section>}
       {recoveryMessage && <section className="notice"><strong>Lifecycle recovery</strong><p>{recoveryMessage}</p></section>}
-      {installations.some((record) => record.state === "active") && <section className="release-panel" aria-labelledby="deployments-heading"><p className="eyebrow">Lifecycle inventory</p><h2 id="deployments-heading">Managed deployments</h2><p>These durable records are Ranch Hand's authoritative deployment inventory. The launcher terminal is only a startup and diagnostic surface.</p>{installations.filter((record) => record.state === "active").map((record) => <div className="inline-result success" key={record.deploymentId}><strong>{record.plan.name}</strong><dl><div><dt>Target</dt><dd>{record.target}</dd></div><div><dt>Project</dt><dd>{record.plan.configuration.projectName || record.plan.configuration.appName || record.plan.configuration.workerName || "Managed target"}</dd></div><div><dt>Version</dt><dd>{record.version}</dd></div><div><dt>State</dt><dd>{record.state}</dd></div><div><dt>Updated</dt><dd>{new Date(record.updatedAt).toLocaleString()}</dd></div></dl>{record.target === "local-wsl-compose" && <a href="http://127.0.0.1:8080" target="_blank" rel="noreferrer">Open RepoWrangler</a>}{record.target === "remote-linux-compose" && record.plan.configuration.accessMode === "private-lan" && <a href={`http://${record.plan.configuration.host}:8080`} target="_blank" rel="noreferrer">Open RepoWrangler on {record.plan.configuration.host}</a>}</div>)}</section>}
+      {removalMessage && <section className="notice"><strong>Deployment removal</strong><p>{removalMessage}</p></section>}
+      {installations.some((record) => record.state === "active") && <section className="release-panel" aria-labelledby="deployments-heading"><p className="eyebrow">Lifecycle inventory</p><h2 id="deployments-heading">Managed deployments</h2><p>These durable records are Ranch Hand's authoritative deployment inventory. The launcher terminal is only a startup and diagnostic surface.</p>{installations.filter((record) => record.state === "active").map((record) => <div className="inline-result success" key={record.deploymentId}><strong>{record.plan.name}</strong><dl><div><dt>Target</dt><dd>{record.target}</dd></div><div><dt>Project</dt><dd>{record.plan.configuration.projectName || record.plan.configuration.appName || record.plan.configuration.workerName || "Managed target"}</dd></div><div><dt>Version</dt><dd>{record.version}</dd></div><div><dt>State</dt><dd>{record.state}</dd></div><div><dt>Updated</dt><dd>{new Date(record.updatedAt).toLocaleString()}</dd></div></dl>{record.target === "local-wsl-compose" && <><a href="http://127.0.0.1:8080" target="_blank" rel="noreferrer">Open RepoWrangler</a><div className="install-panel"><strong>Remove this WSL deployment</strong><p>This permanently deletes the owned Compose containers, persistent data volume, network, deployment files, and active Ranch Hand inventory record.</p><label className="confirmation"><input type="checkbox" checked={Boolean(removalConfirmations[record.deploymentId])} onChange={(event) => setRemovalConfirmations((current) => ({ ...current, [record.deploymentId]: event.target.checked }))} /> I understand this permanently deletes this deployment and its RepoWrangler data.</label><button type="button" className="danger" disabled={!removalConfirmations[record.deploymentId] || removingDeployment !== ""} onClick={() => uninstallWSLDeployment(record)}>{removingDeployment === record.deploymentId ? "Removing deployment…" : "Permanently remove deployment"}</button></div></>}{record.target === "remote-linux-compose" && record.plan.configuration.accessMode === "private-lan" && <a href={`http://${record.plan.configuration.host}:8080`} target="_blank" rel="noreferrer">Open RepoWrangler on {record.plan.configuration.host}</a>}</div>)}</section>}
       {activeOperations.length > 0 && <section className="release-panel" aria-labelledby="recovery-heading"><p className="eyebrow">Interrupted lifecycle work</p><h2 id="recovery-heading">Recover active operations</h2><p>Ranch Hand found durable operation locks from an interrupted session. Pre-apply phases can be closed without touching the target. A phase where apply may have started reruns the adapter's ownership-checked recovery with fresh in-memory credentials.</p>{activeOperations.map((operation) => { const preApply = operation.phase === "prepared" || operation.phase === "backup-complete"; const fields = preApply || operation.target === "local-compose" ? [] : (credentialFields[operation.target] || []); const values = recoveryCredentials[operation.deploymentId] || {}; const credentialsReady = recoveryCredentialsReady(operation, values); return <div className="inline-result install-panel" key={operation.operationId}><strong>{operation.kind} — {operation.target}</strong><p>Phase: {operation.phase}. Release: {operation.fromVersion ? `${operation.fromVersion} → ` : ""}{operation.toVersion}. Last journal update: {new Date(operation.updatedAt).toLocaleString()}.</p>{fields.map((field) => <label key={field.key}>{field.label}{field.file ? <input type="file" accept=".pem,.key" onChange={async (event) => { const file = event.target.files?.[0]; if (file && file.size > 1024 * 1024) { setRecoveryMessage("SSH private key file exceeds the 1 MiB safety limit"); return; } const contents = file ? await file.text() : ""; setRecoveryCredentials((current) => ({ ...current, [operation.deploymentId]: { ...(current[operation.deploymentId] || {}), [field.key]: contents } })); }} /> : <input type="password" placeholder={field.placeholder} value={values[field.key] || ""} onChange={(event) => setRecoveryCredentials((current) => ({ ...current, [operation.deploymentId]: { ...(current[operation.deploymentId] || {}), [field.key]: event.target.value } }))} />}</label>)}<button type="button" disabled={recoveringDeployment !== "" || !credentialsReady} onClick={() => recoverActiveOperation(operation)}>{recoveringDeployment === operation.deploymentId ? "Recovering…" : preApply ? "Safely close pre-apply operation" : operation.target === "local-wsl-compose" ? "Remove failed installation and release lock" : "Run ownership-checked recovery"}</button></div>; })}</section>}
       <section className="release-panel" aria-labelledby="release-heading">
         <p className="eyebrow">Immutable release</p>

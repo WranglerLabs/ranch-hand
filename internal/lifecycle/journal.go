@@ -181,7 +181,7 @@ func (s *Store) BeginWithInputBackup(kind OperationKind, candidate plan.Deployme
 		// A committed journal can survive a process interruption between its
 		// durable write and installation-record/lock finalization. Reconcile that
 		// state before allowing another operation to acquire the deployment.
-		if existing.Phase == Committed && existing.Kind != Backup {
+		if (existing.Phase == Committed && existing.Kind != Backup) || (existing.Phase == Recovered && existing.Kind == Uninstall) {
 			if _, reconcileErr := s.recordInstallationLocked(existing); reconcileErr != nil {
 				return Journal{}, fmt.Errorf("reconcile committed installation state: %w", reconcileErr)
 			}
@@ -294,6 +294,13 @@ func (s *Store) TransitionWithReference(deploymentID, operationID string, next P
 		if _, err := s.recordInstallationLocked(journal); err != nil {
 			// Keep the operation lock in place. Repeating the committed transition
 			// or beginning a later operation will reconcile this exact journal.
+			return journal, err
+		}
+	}
+	if next == Recovered && journal.Kind == Uninstall {
+		if _, err := s.recordInstallationLocked(journal); err != nil {
+			// A recovered uninstall completed target removal. Keep the lock until
+			// its inventory state is durably reconciled as uninstalled.
 			return journal, err
 		}
 	}

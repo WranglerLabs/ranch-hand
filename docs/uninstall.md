@@ -1,9 +1,15 @@
 # Remove a Ranch Hand evaluation deployment
 
-Ranch Hand Public Preview does not yet provide an automated **Uninstall** action.
-Use this runbook only when you intentionally need to remove an evaluation
-deployment before that lifecycle is implemented. These steps act on the target;
-they do not erase Ranch Hand's local evidence.
+Ranch Hand Public Preview provides managed permanent removal for active local
+WSL Compose deployments. Open **Managed deployments**, select the data-deletion
+confirmation, and choose **Permanently remove deployment**. Ranch Hand verifies
+the exact ownership marker, transferred-file hashes, and Docker labels before
+removing the Compose project, persistent volume, dedicated directory, and active
+inventory record.
+
+Use this runbook for retain-data WSL removal or targets whose managed uninstall
+has not shipped. Manual steps act on the target and do not reconcile Ranch
+Hand's local evidence.
 
 ## Before removing anything
 
@@ -16,11 +22,10 @@ they do not erase Ranch Hand's local evidence.
 4. Match every target resource to the names in the plan and to the labels or
    marker created by Ranch Hand. Stop if ownership is missing or ambiguous.
 
-The current RC keeps the installation record after manual target removal. That
-record is intentional evidence, but Ranch Hand will continue to show the target
-as installed and will not reinstall over it. Do not delete or edit files below
-`%LOCALAPPDATA%\WranglerLabs\Ranch Hand`; catalog reconciliation and automated
-uninstall remain follow-on lifecycle work.
+Manual target removal keeps the installation record as evidence, so Ranch Hand
+continues to show the target as installed and will not reinstall over it. The
+managed WSL permanent-removal action reconciles its own record automatically.
+Do not delete or edit files below `%LOCALAPPDATA%\WranglerLabs\Ranch Hand`.
 
 ## Local Docker Desktop
 
@@ -47,6 +52,9 @@ docker volume rm <dataVolume>
 ```
 
 ## Local WSL Docker Compose
+
+For permanent deletion, prefer the managed action in Ranch Hand. The commands
+below remain available for retain-data removal or manual recovery.
 
 The default WSL directory is
 `$HOME/.<projectName>-ranch-hand`. Run the following inside the exact WSL

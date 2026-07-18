@@ -144,6 +144,54 @@ func TestInstallCommitsAfterApplyAndVerify(t *testing.T) {
 	}
 }
 
+func TestUninstallRemovesTargetWithoutRestagingReleaseAndClosesInventory(t *testing.T) {
+	mutator, staged := &fakeMutator{}, &fakeStager{}
+	coordinator, store := coordinatorAndStoreForTest(t, mutator, staged)
+	seedInstalledVersion(t, coordinator, mutator, staged, "v1.2.3")
+	candidate := operationPlan("v1.2.3")
+
+	result, err := coordinator.Run(context.Background(), Request{
+		Kind: lifecycle.Uninstall, Plan: candidate, FromVersion: "v1.2.3",
+	})
+	if err != nil || result.Journal.Phase != lifecycle.Committed {
+		t.Fatalf("uninstall failed: %+v, %v", result, err)
+	}
+	if strings.Join(mutator.calls, ",") != "apply" || staged.calls != 0 {
+		t.Fatalf("uninstall unexpectedly staged or verified a release: calls=%v stage=%d", mutator.calls, staged.calls)
+	}
+	deploymentID, err := lifecycle.DeploymentID(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Installation(deploymentID)
+	if err != nil || record.State != lifecycle.InstallationUninstalled || record.LastOperationKind != lifecycle.Uninstall {
+		t.Fatalf("uninstall did not close inventory: %+v, %v", record, err)
+	}
+}
+
+func TestRecoveredUninstallStillClosesInventoryAfterIdempotentCleanup(t *testing.T) {
+	mutator, staged := &fakeMutator{}, &fakeStager{}
+	coordinator, store := coordinatorAndStoreForTest(t, mutator, staged)
+	seedInstalledVersion(t, coordinator, mutator, staged, "v1.2.3")
+	mutator.applyError = errors.New("connection ended after target removal")
+	candidate := operationPlan("v1.2.3")
+
+	result, err := coordinator.Run(context.Background(), Request{
+		Kind: lifecycle.Uninstall, Plan: candidate, FromVersion: "v1.2.3",
+	})
+	if err == nil || !result.Recovered || result.Journal.Phase != lifecycle.Recovered {
+		t.Fatalf("uninstall failure did not complete idempotent recovery: %+v, %v", result, err)
+	}
+	deploymentID, identityErr := lifecycle.DeploymentID(candidate)
+	if identityErr != nil {
+		t.Fatal(identityErr)
+	}
+	record, recordErr := store.Installation(deploymentID)
+	if recordErr != nil || record.State != lifecycle.InstallationUninstalled || record.LastOperationKind != lifecycle.Uninstall {
+		t.Fatalf("recovered uninstall left stale active inventory: %+v, %v", record, recordErr)
+	}
+}
+
 func TestUpdateBacksUpBeforeApply(t *testing.T) {
 	mutator, staged := &fakeMutator{}, &fakeStager{}
 	coordinator := coordinatorForTest(t, mutator, staged)

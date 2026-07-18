@@ -165,10 +165,10 @@ func (c *Coordinator) Run(ctx context.Context, request Request) (Result, error) 
 	if err := request.Plan.Validate(); err != nil {
 		return Result{}, err
 	}
-	if request.Kind != lifecycle.Install && request.Kind != lifecycle.Update && request.Kind != lifecycle.Backup && request.Kind != lifecycle.Restore && request.Kind != lifecycle.Rollback && request.Kind != lifecycle.Repair {
+	if request.Kind != lifecycle.Install && request.Kind != lifecycle.Update && request.Kind != lifecycle.Backup && request.Kind != lifecycle.Restore && request.Kind != lifecycle.Rollback && request.Kind != lifecycle.Repair && request.Kind != lifecycle.Uninstall {
 		return Result{}, fmt.Errorf("%s coordinator is not implemented yet", request.Kind)
 	}
-	if request.Kind != lifecycle.Backup {
+	if request.Kind != lifecycle.Backup && request.Kind != lifecycle.Uninstall {
 		if err := artifactMatchesPlan(request.Artifact, request.Plan); err != nil {
 			return Result{}, err
 		}
@@ -203,6 +203,31 @@ func (c *Coordinator) Run(ctx context.Context, request Request) (Result, error) 
 		return Result{}, err
 	}
 	result.Journal = journal
+	if request.Kind == lifecycle.Uninstall {
+		updated, transitionErr := c.store.Transition(journal.DeploymentID, journal.OperationID, lifecycle.Staged)
+		if transitionErr != nil {
+			return result, transitionErr
+		}
+		result.Journal = updated
+		if applyErr := mutator.Apply(ctx, request.Kind, request.Plan, request.FromVersion, bundle.StagedBundle{}, lifecycle.OperationBackups{}, request.Credentials); applyErr != nil {
+			return c.recover(ctx, request, mutator, result, fmt.Errorf("remove owned target deployment: %w", applyErr))
+		}
+		updated, transitionErr = c.store.Transition(journal.DeploymentID, journal.OperationID, lifecycle.Applied)
+		if transitionErr != nil {
+			return c.recover(ctx, request, mutator, result, fmt.Errorf("record removed target phase: %w", transitionErr))
+		}
+		result.Journal = updated
+		updated, transitionErr = c.store.Transition(journal.DeploymentID, journal.OperationID, lifecycle.Verified)
+		if transitionErr != nil {
+			return c.recover(ctx, request, mutator, result, fmt.Errorf("record verified removal phase: %w", transitionErr))
+		}
+		result.Journal = updated
+		updated, transitionErr = c.store.Transition(journal.DeploymentID, journal.OperationID, lifecycle.Committed)
+		if transitionErr == nil {
+			result.Journal = updated
+		}
+		return result, transitionErr
+	}
 
 	if request.Kind == lifecycle.Update || request.Kind == lifecycle.Backup || request.Kind == lifecycle.Restore || request.Kind == lifecycle.Rollback || request.Kind == lifecycle.Repair {
 		artifact, backupErr := mutator.Backup(ctx, request.Plan, request.FromVersion, request.Credentials)

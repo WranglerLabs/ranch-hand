@@ -306,6 +306,37 @@ func TestListsInstallationRecords(t *testing.T) {
 	}
 }
 
+func TestManagedWSLUninstallRequiresPermanentDeleteConfirmation(t *testing.T) {
+	candidate := plan.DeploymentPlan{
+		SchemaVersion: plan.CurrentSchemaVersion, Name: "Local WSL Wrangler",
+		Release: plan.ReleaseSelection{Version: "v1.2.3", ManifestURL: "https://github.com/WranglerLabs/repo-wrangler/releases/download/v1.2.3/release-manifest.json", ManifestSHA256: strings.Repeat("a", 64), ArtifactSHA256: strings.Repeat("b", 64), ArtifactSize: 42},
+		Target:  plan.Target{Kind: "local-wsl-compose"}, Configuration: map[string]string{"distribution": "Ubuntu", "projectName": "repo-wrangler-ranch-hand"},
+	}
+	encoded, err := plan.CanonicalJSON(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deploymentID, err := lifecycle.DeploymentID(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &fakeInstallationReader{records: []lifecycle.InstallationRecord{{
+		DeploymentID: deploymentID, Target: "local-wsl-compose", State: lifecycle.InstallationActive,
+		Version: "v1.2.3", Plan: encoded,
+	}}}
+	runner := &fakeOperationRunner{}
+	h := newWithServices("secret-token", "test", testUI(), nil, nil, nil, runner, reader, nil)
+
+	response := authorizedPost(h, "/api/v1/installations/"+deploymentID+"/uninstall", `{"confirmed":false,"deleteData":true,"credentials":{}}`)
+	if response.Code != http.StatusBadRequest || runner.request.Kind != "" {
+		t.Fatalf("unconfirmed uninstall was accepted: %d %s", response.Code, response.Body.String())
+	}
+	response = authorizedPost(h, "/api/v1/installations/"+deploymentID+"/uninstall", `{"confirmed":true,"deleteData":true,"credentials":{}}`)
+	if response.Code != http.StatusOK || runner.request.Kind != lifecycle.Uninstall || runner.request.FromVersion != "v1.2.3" || runner.request.Plan.Target.Kind != "local-wsl-compose" {
+		t.Fatalf("confirmed WSL uninstall was not dispatched: %d %s request=%+v", response.Code, response.Body.String(), runner.request)
+	}
+}
+
 func TestListsAndExplicitlyPrunesLocalRollbackPool(t *testing.T) {
 	candidate := plan.DeploymentPlan{
 		SchemaVersion: plan.CurrentSchemaVersion, Name: "Local Wrangler",

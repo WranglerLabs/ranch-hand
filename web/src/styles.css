@@ -31,6 +31,7 @@ button:disabled { cursor: wait; opacity: .65; }
 .operation-warning { color: #ffd69a; font-weight: 700; }
 .button-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
 button.secondary { border: 1px solid #52725e; color: #eaf4ee; background: transparent; }
+button.danger { border: 1px solid #b96b60; color: #fff3f0; background: #7a2f27; }
 .inline-result { margin-top: 18px; padding: 18px; border: 1px solid #345845; border-radius: 12px; background: #122019; }
 .inline-result.error { border-color: #8a4e46; background: #281714; }
 .inline-result p { margin: 8px 0 0; }

@@ -84,12 +84,13 @@ streams it directly into the selected WSL Docker Engine. Compose uses only that
 loaded image with `pull_policy: never`; the WSL install does not contact GHCR
 and does not require a GitHub account, registry login, or token.
 
-This Preview supports a new WSL evaluation install. WSL backup, update, restore,
-rollback, repair, and uninstall remain open lifecycle work.
-
-Until automated uninstall ships, use the ownership-checked
-[manual removal runbook](docs/uninstall.md) for target-specific retain-data and
-permanent-deletion procedures.
+This Preview supports WSL evaluation installation and managed permanent
+removal. An active WSL deployment appears in **Managed deployments** with an
+explicit data-deletion confirmation and **Permanently remove deployment**
+action. WSL backup, update, restore, rollback, repair, and retain-data uninstall
+remain open lifecycle work. Use the ownership-checked
+[manual removal runbook](docs/uninstall.md) for retain-data removal and targets
+that do not yet expose managed uninstall.
 
 If an install is interrupted after Ranch Hand creates its dedicated directory,
 the next preflight recognizes the matching durable journal and offers

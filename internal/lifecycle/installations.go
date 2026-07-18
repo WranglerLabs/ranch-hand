@@ -118,8 +118,8 @@ func (s *Store) validateOperationCurrentStateLocked(kind OperationKind, deployme
 }
 
 func (s *Store) recordInstallationLocked(journal Journal) (InstallationRecord, error) {
-	if journal.Phase != Committed {
-		return InstallationRecord{}, errors.New("installation state can only follow a committed operation")
+	if journal.Phase != Committed && !(journal.Kind == Uninstall && journal.Phase == Recovered) {
+		return InstallationRecord{}, errors.New("installation state can only follow a committed operation or a recovered uninstall")
 	}
 	if err := journal.Validate(); err != nil {
 		return InstallationRecord{}, err

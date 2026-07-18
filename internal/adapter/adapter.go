@@ -55,18 +55,32 @@ type Preflighter interface {
 	Preflight(context.Context, plan.DeploymentPlan, Credentials) Report
 }
 
+type RemnantCleaner interface {
+	CleanupRemnant(context.Context, plan.DeploymentPlan, Credentials) error
+}
+
 type Registry struct {
 	adapters map[string]Preflighter
+	cleaners map[string]RemnantCleaner
 }
 
 func NewRegistry() *Registry {
+	wsl := NewWSLCompose()
 	return &Registry{adapters: map[string]Preflighter{
 		"azure-container-apps": NewAzureContainerApps(),
 		"cloudflare":           NewCloudflare(),
 		"local-compose":        NewLocalDocker(),
-		"local-wsl-compose":    NewWSLCompose(),
+		"local-wsl-compose":    wsl,
 		"remote-linux-compose": NewRemoteLinuxCompose(),
-	}}
+	}, cleaners: map[string]RemnantCleaner{"local-wsl-compose": wsl}}
+}
+
+func (r *Registry) CleanupRemnant(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) error {
+	cleaner, ok := r.cleaners[candidate.Target.Kind]
+	if !ok {
+		return fmt.Errorf("remnant cleanup is not available for target %q", candidate.Target.Kind)
+	}
+	return cleaner.CleanupRemnant(ctx, candidate, credentials)
 }
 
 func (r *Registry) Preflight(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) Report {

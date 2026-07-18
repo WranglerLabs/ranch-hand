@@ -44,6 +44,10 @@ type targetPreflighter interface {
 	Preflight(context.Context, plan.DeploymentPlan, adapter.Credentials) adapter.Report
 }
 
+type targetRemnantCleaner interface {
+	CleanupRemnant(context.Context, plan.DeploymentPlan, adapter.Credentials) error
+}
+
 type bundleStager interface {
 	Stage(productrelease.VerifiedArtifact) (bundle.StagedBundle, error)
 }
@@ -75,6 +79,7 @@ type Server struct {
 	verifiedMu        sync.RWMutex
 	verified          map[string]productrelease.VerifiedArtifact
 	targets           targetPreflighter
+	remnantCleaner    targetRemnantCleaner
 	stager            bundleStager
 	coordinator       operationRunner
 	installations     installationReader
@@ -117,7 +122,8 @@ func NewWithDependencies(token, version string, ui fs.FS, verifier releaseVerifi
 
 func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, targets targetPreflighter, stager bundleStager, coordinator operationRunner, installations installationReader, rollbackPool rollbackPoolManager) http.Handler {
 	discoverer, _ := verifier.(releaseDiscoverer)
-	s := &Server{token: token, version: version, ui: ui, releaseVerifier: verifier, releaseDiscoverer: discoverer, verified: make(map[string]productrelease.VerifiedArtifact), targets: targets, stager: stager, coordinator: coordinator, installations: installations, rollbackPool: rollbackPool, readyPlans: make(map[string]bool)}
+	cleaner, _ := targets.(targetRemnantCleaner)
+	s := &Server{token: token, version: version, ui: ui, releaseVerifier: verifier, releaseDiscoverer: discoverer, verified: make(map[string]productrelease.VerifiedArtifact), targets: targets, remnantCleaner: cleaner, stager: stager, coordinator: coordinator, installations: installations, rollbackPool: rollbackPool, readyPlans: make(map[string]bool)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", s.live)
 	mux.Handle("GET /api/v1/status", s.authorize(http.HandlerFunc(s.status)))
@@ -127,6 +133,7 @@ func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, 
 	mux.Handle("POST /api/v1/plans/preflight", s.authorize(http.HandlerFunc(s.preflightPlan)))
 	mux.Handle("POST /api/v1/plans/dry-run", s.authorize(http.HandlerFunc(s.dryRunPlan)))
 	mux.Handle("POST /api/v1/targets/preflight", s.authorize(http.HandlerFunc(s.preflightTarget)))
+	mux.Handle("POST /api/v1/targets/remnants/cleanup", s.authorize(http.HandlerFunc(s.cleanupTargetRemnant)))
 	mux.Handle("GET /api/v1/targets/wsl-distributions", s.authorize(http.HandlerFunc(s.wslDistributions)))
 	mux.Handle("POST /api/v1/bundles/stage", s.authorize(http.HandlerFunc(s.stageBundle)))
 	mux.Handle("POST /api/v1/operations/run", s.authorize(http.HandlerFunc(s.runOperation)))
@@ -530,7 +537,90 @@ func (s *Server) annotateLifecycleTarget(candidate plan.DeploymentPlan, report a
 		report.State = "lifecycle-unavailable"
 		return replaceBoundaryCheck(report, "Ranch Hand could not safely read the installation record for this target. No target changes were made.")
 	}
+	if candidate.Target.Kind == "local-wsl-compose" && failedCheck(report, "wsl-directory-boundary") {
+		report.Ready = false
+		report.State = "orphan-cleanup-available"
+		return replaceBoundaryCheck(report, "The dedicated WSL directory exists without an active Ranch Hand lifecycle record. Inspect and remove Ranch Hand remnants below, then preflight again.")
+	}
 	return report
+}
+
+func failedCheck(report adapter.Report, name string) bool {
+	for _, check := range report.Checks {
+		if check.Name == name && !check.OK {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) cleanupTargetRemnant(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request rejected"})
+		return
+	}
+	if s.targets == nil || s.remnantCleaner == nil || s.installations == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "ownership-safe target remnant cleanup is unavailable"})
+		return
+	}
+	var request struct {
+		Plan        plan.DeploymentPlan `json:"plan"`
+		Credentials adapter.Credentials `json:"credentials"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxTargetRequestSize))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid target remnant cleanup request"})
+		return
+	}
+	defer request.Credentials.Clear()
+	if err := request.Credentials.Validate(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := request.Plan.Validate(); err != nil || request.Plan.Target.Kind != "local-wsl-compose" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "a valid local WSL Compose plan is required"})
+		return
+	}
+	verified, found := s.verifiedPlan(request.Plan)
+	if !found || !plan.Preflight(request.Plan, verified.CachePath).Ready {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "the plan does not match a currently verified release artifact"})
+		return
+	}
+	deploymentID, err := lifecycle.DeploymentID(request.Plan)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if _, err = s.installations.Active(deploymentID); err == nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "an active lifecycle operation exists; use its normal recovery action"})
+		return
+	} else if !errors.Is(err, os.ErrNotExist) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "the active lifecycle inventory could not be read safely"})
+		return
+	}
+	if record, recordErr := s.installations.Installation(deploymentID); recordErr == nil && record.State == lifecycle.InstallationActive {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "an active installation record exists; Ranch Hand will not remove it as a remnant"})
+		return
+	} else if recordErr != nil && !errors.Is(recordErr, os.ErrNotExist) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "the installation inventory could not be read safely"})
+		return
+	}
+	report := s.targets.Preflight(r.Context(), request.Plan, request.Credentials)
+	if !failedCheck(report, "wsl-directory-boundary") {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "the target no longer has an orphaned WSL directory collision"})
+		return
+	}
+	if err := s.remnantCleaner.CleanupRemnant(r.Context(), request.Plan, request.Credentials); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	if key, keyErr := planSessionKey(request.Plan); keyErr == nil {
+		s.readyMu.Lock()
+		delete(s.readyPlans, key)
+		s.readyMu.Unlock()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"cleaned": true, "deploymentId": deploymentID})
 }
 
 func replaceBoundaryCheck(report adapter.Report, message string) adapter.Report {

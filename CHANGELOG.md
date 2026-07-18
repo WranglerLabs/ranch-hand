@@ -6,6 +6,26 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.11] - 2026-07-18
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- Replaced the terminal WSL directory-collision message with an explicit
+  **Inspect and remove Ranch Hand remnants** action when no active lifecycle or
+  installation record exists for the bound plan.
+- Added a loopback-authenticated cleanup endpoint that rechecks the verified
+  plan, release artifact, current target collision, and lifecycle inventory
+  immediately before mutation.
+- Limited journal-free cleanup to an exact matching Ranch Hand ownership marker,
+  the known legacy empty-marker pattern, or a completely empty dedicated
+  directory. Mismatched or invalid markers, unknown files, symlinks, changed
+  deployment files, and unowned Docker resources remain hard stops.
+- Refreshed live target preflight automatically after successful cleanup so the
+  operator can proceed without recreating the deployment plan.
+
 ## [0.1.0-rc.10] - 2026-07-17
 
 **Classification: Public Preview.** Publicly downloadable and intended for

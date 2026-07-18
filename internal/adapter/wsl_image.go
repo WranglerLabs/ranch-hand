@@ -17,6 +17,7 @@ import (
 type companionImage struct {
 	image        string
 	runtimeImage string
+	imageID      string
 	url          string
 	sha256       string
 	size         int64
@@ -25,6 +26,7 @@ type companionImage struct {
 var repoWranglerV1010Companion = companionImage{
 	image:        "ghcr.io/wranglerlabs/repo-wrangler-server@sha256:89d1b4091137eef57c91270d363fb6c76e6d60c94dcac92b129b2b8629f45093",
 	runtimeImage: "repo-wrangler-server:v1.0.10-ranch-hand",
+	imageID:      "sha256:89d1b4091137eef57c91270d363fb6c76e6d60c94dcac92b129b2b8629f45093",
 	url:          "https://github.com/WranglerLabs/ranch-hand/releases/download/v0.1.0-rc.13/repo-wrangler-v1.0.10-linux-amd64-image.tar.gz",
 	sha256:       "bc2c7507b592a6da58ec1eeed199d2c3b028bdb6a6b73f22a00ff7aab46ada5e",
 	size:         286575554,
@@ -49,6 +51,10 @@ func cacheCompanionImage(ctx context.Context, companion companionImage, client *
 	if matchesFile(destination, companion.sha256, companion.size) {
 		return destination, nil
 	}
+	// Remove only an entry that failed verification before downloading. Never
+	// remove the destination after downloading because another Ranch Hand process
+	// may have committed the same verified archive in the meantime.
+	_ = os.Remove(destination)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, companion.url, nil)
 	if err != nil {
 		return "", err
@@ -91,9 +97,11 @@ func cacheCompanionImage(ctx context.Context, companion companionImage, client *
 	if err := temporary.Close(); err != nil {
 		return "", err
 	}
-	_ = os.Remove(destination)
 	if err := os.Rename(temporaryPath, destination); err != nil {
-		return "", err
+		if matchesFile(destination, companion.sha256, companion.size) {
+			return destination, nil
+		}
+		return "", fmt.Errorf("commit verified WSL image archive: %w", err)
 	}
 	committed = true
 	return destination, nil
@@ -130,7 +138,7 @@ func prepareWSLCompanion(ctx context.Context, distribution, image string) (strin
 	if err != nil {
 		return "", err
 	}
-	if err := loadWSLImageArchive(ctx, distribution, archive, companion.runtimeImage); err != nil {
+	if err := loadWSLImageArchive(ctx, distribution, archive, companion.runtimeImage, companion.imageID); err != nil {
 		return "", err
 	}
 	return companion.runtimeImage, nil

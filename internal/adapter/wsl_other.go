@@ -17,6 +17,6 @@ func connectWSL(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, 
 	return nil, errors.New("WSL deployment is available only in Ranch Hand for Windows")
 }
 
-func loadWSLImageArchive(context.Context, string, string, string) error {
+func loadWSLImageArchive(context.Context, string, string, string, string) error {
 	return errors.New("WSL deployment is available only in Ranch Hand for Windows")
 }

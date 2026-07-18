@@ -166,8 +166,7 @@ func remoteOverride(project, containerName, volumeName, deploymentID, version, r
 	}
 	return fmt.Sprintf(`services:
   server:
-%s
-    container_name: %s
+%s    container_name: %s
     labels:
       wranglerlabs.ranch-hand.managed: "true"
       wranglerlabs.ranch-hand.deployment: "%s"
@@ -295,6 +294,12 @@ func verifyRemoteResources(ctx context.Context, host remoteHost, marker remoteIn
 	image, err := host.Run(ctx, "docker container inspect --format '{{.Config.Image}}' "+shellQuote(marker.ContainerName), nil)
 	if err != nil || image != expectedImage {
 		return errors.New("remote container does not use the verified immutable image")
+	}
+	if marker.RuntimeImage != "" {
+		imageID, imageErr := host.Run(ctx, "docker container inspect --format '{{.Image}}' "+shellQuote(marker.ContainerName), nil)
+		if imageErr != nil || imageID != repoWranglerV1010Companion.imageID {
+			return errors.New("remote container runtime image ID does not match the verified immutable image")
+		}
 	}
 	running, err := host.Run(ctx, "docker container inspect --format '{{.State.Running}}' "+shellQuote(marker.ContainerName), nil)
 	if err != nil || running != "true" {

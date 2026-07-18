@@ -1,8 +1,12 @@
 package adapter
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"github.com/WranglerLabs/ranch-hand/internal/bundle"
+	"github.com/WranglerLabs/ranch-hand/internal/lifecycle"
 )
 
 func TestWSLBoundaryMessagesAreLocalAndActionable(t *testing.T) {
@@ -18,5 +22,15 @@ func TestWSLBoundaryMessagesAreLocalAndActionable(t *testing.T) {
 		if !strings.Contains(message, test.want) || strings.Contains(message, "remote") {
 			t.Fatalf("unexpected WSL boundary message %q", message)
 		}
+	}
+}
+
+func TestWSLApplyValidatesDistributionBeforeOperatingSystemCommand(t *testing.T) {
+	candidate := targetPlan("local-wsl-compose", map[string]string{
+		"distribution": "Ubuntu\nattacker", "projectName": "repo-wrangler",
+	})
+	err := NewWSLCompose().Apply(context.Background(), lifecycle.Install, candidate, "", bundle.StagedBundle{}, lifecycle.OperationBackups{}, Credentials{})
+	if err == nil || !strings.Contains(err.Error(), "distribution") {
+		t.Fatalf("unsafe WSL distribution reached apply: %v", err)
 	}
 }

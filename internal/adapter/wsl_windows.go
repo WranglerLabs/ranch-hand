@@ -102,7 +102,7 @@ func (h *wslHost) Health(ctx context.Context, requestPath string) (int, []byte, 
 
 func (h *wslHost) Close() error { return nil }
 
-func loadWSLImageArchive(ctx context.Context, distribution, archive, runtimeImage string) error {
+func loadWSLImageArchive(ctx context.Context, distribution, archive, runtimeImage, expectedImageID string) error {
 	file, err := os.Open(archive)
 	if err != nil {
 		return fmt.Errorf("open verified WSL image archive: %w", err)
@@ -118,7 +118,7 @@ func loadWSLImageArchive(ctx context.Context, distribution, archive, runtimeImag
 	}
 	host := &wslHost{distribution: distribution, client: &http.Client{Timeout: 30 * time.Second}}
 	loaded, err := host.Run(ctx, "docker image inspect --format '{{.Id}}' "+shellQuote(runtimeImage), nil)
-	if err != nil || loaded != "sha256:89d1b4091137eef57c91270d363fb6c76e6d60c94dcac92b129b2b8629f45093" {
+	if err != nil || loaded != expectedImageID {
 		return errors.New("loaded WSL image does not match the verified RepoWrangler release identity")
 	}
 	return nil

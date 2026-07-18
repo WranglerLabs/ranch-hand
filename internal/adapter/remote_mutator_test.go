@@ -44,6 +44,7 @@ type fakeRemoteHost struct {
 	composeDown bool
 	unowned     bool
 	pullError   bool
+	badImageID  bool
 	commands    []string
 }
 
@@ -180,6 +181,11 @@ func (h *fakeRemoteHost) Run(_ context.Context, command string, stdin []byte) (s
 			return marker.RuntimeImage, nil
 		}
 		return marker.Image, nil
+	case strings.Contains(command, "inspect --format '{{.Image}}'"):
+		if h.badImageID {
+			return "sha256:" + strings.Repeat("f", 64), nil
+		}
+		return repoWranglerV1010Companion.imageID, nil
 	case strings.Contains(command, "inspect --format '{{.State.Running}}'"):
 		return "true", nil
 	case strings.HasPrefix(command, "rm --force -- "):
@@ -273,6 +279,31 @@ func TestWSLStyleInstallUsesVerifiedLoadedImageWithoutRegistryPull(t *testing.T)
 	}
 	if err := adapter.Verify(context.Background(), candidate, Credentials{}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWSLStyleVerificationRejectsRepointedRuntimeTag(t *testing.T) {
+	host := newFakeRemoteHost()
+	adapter := newRemoteLinuxCompose(func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error) { return host, nil })
+	candidate := remoteEvaluationPlan()
+	staged := stagedRemoteBundle(t)
+	for _, name := range []string{"bundle.json", "compose.yaml"} {
+		path := filepath.Join(staged.Path, name)
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		contents = []byte(strings.ReplaceAll(string(contents), "ghcr.io/wranglerlabs/repo-wrangler-server@sha256:"+strings.Repeat("a", 64), repoWranglerV1010Companion.image))
+		if err := os.WriteFile(path, contents, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := adapter.apply(context.Background(), lifecycle.Install, candidate, staged, lifecycle.OperationBackups{}, Credentials{}, repoWranglerV1010Companion.runtimeImage); err != nil {
+		t.Fatal(err)
+	}
+	host.badImageID = true
+	if err := adapter.Verify(context.Background(), candidate, Credentials{}); err == nil || !strings.Contains(err.Error(), "runtime image ID") {
+		t.Fatalf("repointed runtime tag was accepted: %v", err)
 	}
 }
 

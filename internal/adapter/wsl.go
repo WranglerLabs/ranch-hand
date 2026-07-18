@@ -135,6 +135,9 @@ func (a *WSLCompose) Backup(context.Context, plan.DeploymentPlan, string, Creden
 }
 
 func (a *WSLCompose) Apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, fromVersion string, staged bundle.StagedBundle, backups lifecycle.OperationBackups, credentials Credentials) error {
+	if err := candidate.Validate(); err != nil {
+		return err
+	}
 	identity, err := bundle.ReadIdentity(staged)
 	if err != nil {
 		return err

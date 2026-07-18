@@ -44,7 +44,8 @@ where the provider supports it.
 
 ## Mutation and recovery
 
-- Target adapters operate only inside their declared new/evaluation boundary.
+- Target adapters operate only inside their declared new-deployment boundary;
+  target-specific real or evaluation modes remain explicit plan choices.
 - Cleanup and recovery require exact deployment IDs, immutable versions, file
   hashes, provider markers, and Ranch Hand ownership labels.
 - Missing, changed, or ambiguous evidence stops deletion.

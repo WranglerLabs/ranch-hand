@@ -113,11 +113,15 @@ func normalizeWSLPlan(ctx context.Context, candidate plan.DeploymentPlan, host r
 	}
 	project := candidate.Configuration["projectName"]
 	candidate.Target.Kind = "remote-linux-compose"
-	candidate.Configuration = map[string]string{
+	normalizedConfiguration := map[string]string{
 		"host": candidate.Configuration["distribution"], "port": "22", "user": "wsl",
 		"installDirectory": home + "/." + project + "-ranch-hand", "projectName": project,
 		"hostKeySha256": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 	}
+	if demoMode := candidate.Configuration["demoMode"]; demoMode != "" {
+		normalizedConfiguration["demoMode"] = demoMode
+	}
+	candidate.Configuration = normalizedConfiguration
 	return candidate, candidate.Validate()
 }
 

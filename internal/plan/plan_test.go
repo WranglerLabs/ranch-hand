@@ -136,12 +136,17 @@ func TestValidatesLocalWSLComposeTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	candidate.Target.Kind = "local-wsl-compose"
-	candidate.Configuration = map[string]string{"distribution": "Ubuntu-26.04", "projectName": "repo-wrangler"}
+	candidate.Configuration = map[string]string{"distribution": "Ubuntu-26.04", "projectName": "repo-wrangler", "demoMode": "false"}
 	if err := candidate.Validate(); err != nil {
 		t.Fatalf("valid WSL Compose target rejected: %v", err)
 	}
 	candidate.Configuration["distribution"] = "Ubuntu\nattacker"
 	if err := candidate.Validate(); err == nil {
 		t.Fatal("unsafe WSL distribution was accepted")
+	}
+	candidate.Configuration["distribution"] = "Ubuntu-26.04"
+	candidate.Configuration["demoMode"] = "sometimes"
+	if err := candidate.Validate(); err == nil {
+		t.Fatal("invalid demo mode was accepted")
 	}
 }

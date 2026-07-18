@@ -34,3 +34,16 @@ func TestWSLApplyValidatesDistributionBeforeOperatingSystemCommand(t *testing.T)
 		t.Fatalf("unsafe WSL distribution reached apply: %v", err)
 	}
 }
+
+func TestWSLNormalizationPreservesLegacyPlanIdentityWithoutEmptyDemoField(t *testing.T) {
+	candidate := targetPlan("local-wsl-compose", map[string]string{
+		"distribution": "Ubuntu", "projectName": "repo-wrangler",
+	})
+	normalized, err := normalizeWSLPlan(context.Background(), candidate, newFakeRemoteHost())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := normalized.Configuration["demoMode"]; present {
+		t.Fatal("legacy WSL plan gained an empty demoMode field and changed identity")
+	}
+}

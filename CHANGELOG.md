@@ -6,6 +6,34 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.14] - 2026-07-18
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Added
+
+- Local WSL Compose now presents an explicit **Demo mode** toggle in the
+  secret-free deployment plan. It defaults to off.
+- With demo mode off, Ranch Hand starts RepoWrangler with `DEMO_MODE=false`,
+  generates unique 256-bit session and credential-encryption secrets, protects
+  them in the target-only `.env`, and opens RepoWrangler's real first-run
+  provider setup flow.
+- With demo mode on, the existing no-credential mock-data profile remains
+  available as an intentional evaluation choice.
+
+### Fixed
+
+- Ranch Hand no longer silently forces mock data for a local WSL installation.
+- The WSL confirmation and success text now identify the selected real or demo
+  operating mode before installation.
+
+### Verification
+
+- Started the v1.0.10 image with the real-mode environment, verified readiness
+  reported `demoMode: false`, verified authentication reported
+  `setupMode: true`, and removed the smoke deployment.
+
 ## [0.1.0-rc.13] - 2026-07-18
 
 **Classification: Public Preview.** Publicly downloadable and intended for

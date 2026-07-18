@@ -77,11 +77,11 @@ var configurationFields = map[string]map[string]bool{
 		"projectName": true, "dataVolume": true, "listenAddress": true,
 	},
 	"local-wsl-compose": {
-		"distribution": true, "projectName": true,
+		"distribution": true, "projectName": true, "demoMode": false,
 	},
 	"remote-linux-compose": {
 		"host": true, "port": true, "user": true, "installDirectory": true,
-		"projectName": true, "hostKeySha256": true,
+		"projectName": true, "hostKeySha256": true, "demoMode": false,
 	},
 }
 
@@ -224,6 +224,9 @@ func (p DeploymentPlan) Validate() error {
 		if !dockerProjectPattern.MatchString(p.Configuration["projectName"]) {
 			return errors.New("local-wsl-compose projectName must use lowercase letters, numbers, underscore, or hyphen")
 		}
+	}
+	if value, present := p.Configuration["demoMode"]; present && value != "true" && value != "false" {
+		return errors.New("demoMode must be true or false")
 	}
 	if p.Target.Kind == "azure-container-apps" {
 		if !azureSubscriptionPattern.MatchString(p.Configuration["subscriptionId"]) {

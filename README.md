@@ -2,7 +2,7 @@
 
 Ranch Hand is the standalone, Windows-first lifecycle manager for [RepoWrangler](https://github.com/WranglerLabs/repo-wrangler). It is for operators who want to install and manage RepoWrangler without cloning or forking its source repository. Contributors and advanced operators can still use RepoWrangler's documented deployment recipes directly.
 
-> **Status: Public Preview.** [`v0.1.0-rc.13`](docs/releases/v0.1.0-rc.13.md)
+> **Status: Public Preview.** [`v0.1.0-rc.14`](docs/releases/v0.1.0-rc.14.md)
 > is the primary recommended Windows deployment path for RepoWrangler. It is
 > publicly downloadable and functional, but it is unsigned and not production
 > supported or generally available. See the complete [GA readiness
@@ -60,7 +60,7 @@ After a release is verified, the local interface creates a canonical JSON deploy
 
 Preflight revalidates the plan and rehashes the cached artifact before reporting it ready. Dry run describes the native target operations in order and reports `mutated: false`; it does not authenticate, contact the target control plane, or change infrastructure. Live control-plane checks and apply operations belong to the deployment-adapter implementation.
 
-## Local WSL Docker Compose evaluation install
+## Local WSL Docker Compose install
 
 The WSL target detects ordinary installed WSL2 distributions and runs the
 verified published Compose bundle inside the selected distribution. It requires
@@ -70,6 +70,12 @@ Hand uses the WSL user's home directory for its ownership-marked deployment
 files, defaults to the collision-resistant `repo-wrangler-ranch-hand` project,
 creates its Docker-managed data volume, binds
 `127.0.0.1:8080`, and verifies the exact release from Windows.
+
+The secret-free plan includes an explicit **Demo mode** toggle, defaulting to
+off. Off starts RepoWrangler with real data mode, generates unique local session
+and credential-encryption secrets, and opens the first-run provider setup flow.
+On intentionally selects the mock-data evaluation profile. Ranch Hand never
+stores the generated secrets in the exported plan, catalog, or diagnostics.
 
 For RepoWrangler v1.0.10, Ranch Hand downloads a 286,575,554-byte public image
 archive from its own immutable release, verifies the archive's embedded byte

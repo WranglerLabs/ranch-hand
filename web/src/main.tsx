@@ -185,6 +185,7 @@ function App() {
   const [prerequisiteConfirmed, setPrerequisiteConfirmed] = useState(false);
   const [sudoPassword, setSudoPassword] = useState("");
   const [prerequisiteMessage, setPrerequisiteMessage] = useState("");
+  const [remoteInstallMessage, setRemoteInstallMessage] = useState("");
   const [hostKeyInspecting, setHostKeyInspecting] = useState(false);
   const [hostKeyIdentity, setHostKeyIdentity] = useState<SSHHostIdentity | null>(null);
   const [hostKeyError, setHostKeyError] = useState("");
@@ -738,19 +739,34 @@ function App() {
   }
 
   async function installRemote() {
-    if (!planResult || !installConfirmed || (!operationSSHCredentials.sshPrivateKey && !operationSSHCredentials.sshPassword)) return;
+    if (!planResult) {
+      setRemoteInstallMessage("The prepared deployment plan is no longer available. Create and preflight the plan again.");
+      return;
+    }
+    if (!installConfirmed) {
+      setRemoteInstallMessage("Confirm the installation before continuing.");
+      return;
+    }
+    if (!operationSSHCredentials.sshPrivateKey && !operationSSHCredentials.sshPassword) {
+      setRemoteInstallMessage("The in-memory SSH credential is no longer available. Run Test SSH connection and target again; Ranch Hand will retain the successful credential for installation.");
+      return;
+    }
     setInstalling(true);
     setPlanError("");
+    setRemoteInstallMessage("Submitting the Remote Linux installation. Keep Ranch Hand open while it transfers, starts, and verifies RepoWrangler.");
     setOperationResult(null);
+    setOperationKind("remote-install");
     try {
       setOperationResult(await api<OperationResult>("/api/v1/operations/run", {
         method: "POST",
         body: JSON.stringify({ kind: "install", plan: planResult, credentials: operationSSHCredentials }),
       }));
-      setOperationKind("remote-install");
       setOperationSSHCredentials({});
+      setRemoteInstallMessage("RepoWrangler installation completed and passed verification.");
     } catch (reason) {
-      setPlanError(reason instanceof Error ? reason.message : "Remote Linux evaluation installation failed");
+      const message = reason instanceof Error ? reason.message : "Remote Linux evaluation installation failed";
+      setPlanError(message);
+      setRemoteInstallMessage(message);
     } finally {
       setInstalling(false);
     }
@@ -824,7 +840,7 @@ function App() {
         {target === "local-compose" && currentInstallation && rollbackPool.length > 0 && !operationResult && <div className="inline-result install-panel"><strong>Rollback-pool retention</strong><p>{rollbackPool.length} stopped, ownership-verified rollback {rollbackPool.length === 1 ? "environment is" : "environments are"} consuming Docker container and volume storage. Verified backup archives and records are retained when these Docker resources are pruned.</p><label>Keep newest rollback environments<select value={rollbackKeepLatest} onChange={(event) => { setRollbackKeepLatest(Number(event.target.value)); setRollbackPruneConfirmed(false); }}>{Array.from({ length: Math.min(10, rollbackPool.length) + 1 }, (_, value) => <option key={value} value={value}>{value}</option>)}</select></label><label className="confirmation"><input type="checkbox" checked={rollbackPruneConfirmed} onChange={(event) => setRollbackPruneConfirmed(event.target.checked)} /> I understand Ranch Hand will permanently remove {Math.max(0, rollbackPool.length - rollbackKeepLatest)} older stopped rollback container and data volume {Math.max(0, rollbackPool.length - rollbackKeepLatest) === 1 ? "pair" : "pairs"} after re-verifying ownership.</label><button type="button" className="secondary" disabled={!rollbackPruneConfirmed || rollbackPruning || rollbackKeepLatest >= rollbackPool.length} onClick={pruneRollbackPool}>{rollbackPruning ? "Re-verifying and pruning…" : "Prune older rollback environments"}</button></div>}
         {target === "azure-container-apps" && targetReport?.ready && stagedBundle && !operationResult && <div className="inline-result install-panel"><strong>Azure target is ready to install</strong><p>The subscription, resource provider, names, and Azure-managed HTTPS contract passed preflight. Ranch Hand retained the successful ARM token only in this running local session. It will create the dedicated resource group and deploy the verified demo/SQLite template; Azure charges may apply.</p><label className="confirmation"><input type="checkbox" checked={installConfirmed} onChange={(event) => setInstallConfirmed(event.target.checked)} /> Create and install the dedicated Azure evaluation environment.</label><button type="button" disabled={!installConfirmed || !operationAzureToken || installing} onClick={installAzure}>{installing ? "Installing and verifying…" : "Install on Azure"}</button></div>}
         {target === "cloudflare" && targetReport?.ready && stagedBundle && !operationResult && <div className="inline-result install-panel"><strong>Cloudflare target is ready to install</strong><p>The account, workers.dev endpoint, Worker name, and D1 name passed preflight. Ranch Hand retained the successful scoped token only in this running local session. It will create the dedicated Worker and D1 database and publish the verified evaluation bundle.</p><label className="confirmation"><input type="checkbox" checked={installConfirmed} onChange={(event) => setInstallConfirmed(event.target.checked)} /> Create and install the dedicated Cloudflare evaluation environment.</label><button type="button" disabled={!installConfirmed || !operationCloudflareToken || installing} onClick={installCloudflare}>{installing ? "Installing and verifying…" : "Install on Cloudflare"}</button></div>}
-        {target === "remote-linux-compose" && targetReport?.ready && stagedBundle && !operationResult && <div className="inline-result install-panel"><strong>Ready to install on {planResult?.configuration.user}@{planResult?.configuration.host}</strong><p>The SSH connection, Docker Engine, Compose, directory, and project checks passed. Ranch Hand retained the successful credential only in this running local session so you do not need to enter it again.</p><label className="confirmation"><input type="checkbox" checked={installConfirmed} onChange={(event) => setInstallConfirmed(event.target.checked)} /> Install RepoWrangler on this server.</label><button type="button" disabled={!installConfirmed || (!operationSSHCredentials.sshPrivateKey && !operationSSHCredentials.sshPassword) || installing} onClick={installRemote}>{installing ? "Installing and verifying…" : "Install RepoWrangler"}</button></div>}
+        {target === "remote-linux-compose" && targetReport?.ready && stagedBundle && !operationResult && <div className="inline-result install-panel"><strong>Ready to install on {planResult?.configuration.user}@{planResult?.configuration.host}</strong><p>The SSH connection, Docker Engine, Compose, directory, and project checks passed. Ranch Hand retained the successful credential only in this running local session so you do not need to enter it again.</p><label className="confirmation"><input type="checkbox" checked={installConfirmed} onChange={(event) => { setInstallConfirmed(event.target.checked); setRemoteInstallMessage(""); }} /> Install RepoWrangler on this server.</label><button type="button" disabled={!installConfirmed || installing} onClick={installRemote}>{installing ? "Installing and verifying…" : "Install RepoWrangler"}</button>{remoteInstallMessage && <p className={installing ? "operation-progress" : "operation-warning"} role={installing ? "status" : "alert"} aria-live="polite">{remoteInstallMessage}</p>}{installing && <p className="operation-progress" role="status" aria-live="polite">{(() => { const operation = activeOperations.find((item) => item.deploymentId === targetReport.deploymentId); return operation ? `Current lifecycle phase: ${operation.phase}. Ranch Hand is still working; keep this window open.` : "Creating the durable operation journal…"; })()}</p>}</div>}
         {operationResult && operationKind === "install" && <div className="inline-result success"><strong>Docker Desktop RepoWrangler installation committed</strong><p>The container passed its readiness check and the lifecycle journal is {operationResult.operation.journal.phase}. Open <a href={`http://${planResult?.configuration.listenAddress}`} target="_blank" rel="noreferrer">http://{planResult?.configuration.listenAddress}</a>.</p><button type="button" className="secondary" disabled={installing} onClick={backupLocal}>{installing ? "Creating consistent backup…" : "Back up local data"}</button></div>}
         {operationResult && operationKind === "wsl-install" && <div className="inline-result success"><strong>WSL Docker Compose installation committed</strong><p>Docker Compose started the verified RepoWrangler release inside {planResult?.configuration.distribution}. Open <a href="http://127.0.0.1:8080" target="_blank" rel="noreferrer">http://127.0.0.1:8080</a>.</p></div>}
         {operationResult && operationKind === "backup" && <div className="inline-result success"><strong>Consistent local backup committed</strong><p>Ranch Hand archived the managed container's persistent data while preserving its original running or stopped state. A running container was restarted and readiness-verified. The lifecycle journal is {operationResult.operation.journal.phase}.</p>{operationResult.operation.backup && <dl><div><dt>Archive</dt><dd>{operationResult.operation.backup.artifact.locator}</dd></div><div><dt>Size</dt><dd>{operationResult.operation.backup.artifact.size.toLocaleString()} bytes</dd></div><div><dt>SHA-256</dt><dd className="digest">{operationResult.operation.backup.artifact.sha256}</dd></div></dl>}</div>}

@@ -6,6 +6,29 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.18] - 2026-07-18
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- Remote Linux installation now acknowledges the click immediately beside the
+  install button and reports submission, active work, completion, or the exact
+  API failure in the same panel.
+- The UI displays the durable lifecycle phase every second while the blocking
+  SSH/Compose operation runs.
+- Missing plan confirmation or an expired in-memory SSH credential no longer
+  causes the click handler to return silently. Ranch Hand explains exactly
+  which step must be repeated.
+- The operation kind is selected before submission, making the active action
+  explicit for the entire request rather than only after completion.
+
+### Verification
+
+- Full Go test suite passes.
+- React TypeScript checking and production build pass.
+
 ## [0.1.0-rc.17] - 2026-07-18
 
 **Classification: Public Preview.** Publicly downloadable and intended for

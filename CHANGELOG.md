@@ -6,6 +6,22 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.12] - 2026-07-18
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- WSL and remote Linux Compose now pull the exact verified image before Ranch
+  Hand creates the dedicated installation directory, marker, or Docker
+  resources. Registry authentication and availability failures therefore leave
+  no failed installation to recover.
+- Compose starts with `--pull never` after the successful pre-mutation pull, so
+  apply cannot repeat a registry request after ownership state is written.
+- Registry failures preserve bounded Docker output, including authorization
+  errors, in the visible operation result.
+
 ## [0.1.0-rc.11] - 2026-07-18
 
 **Classification: Public Preview.** Publicly downloadable and intended for

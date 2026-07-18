@@ -90,19 +90,22 @@ func (a *RemoteLinuxCompose) Preflight(ctx context.Context, candidate plan.Deplo
 	appendCheck(&report, "ssh-host-identity", true, "Ranch Hand connected through native SSH and verified the pinned host identity.")
 
 	if _, err := host.Run(ctx, `command -v docker`, nil); err != nil {
-		appendCheck(&report, "remote-docker-command", false, "Docker is not installed on the remote Linux server for this account. Install Docker Engine and the Docker Compose v2 plugin, then retry.")
+		report.State = "prerequisites-installable"
+		appendCheck(&report, "remote-docker-command", false, "Docker Engine is not installed. Ranch Hand can install Docker Engine and Compose on a supported Ubuntu/Debian server using sudo.")
 		return report
 	}
 	appendCheck(&report, "remote-docker-command", true, "The Docker command is installed on the remote Linux server.")
 	dockerVersion, err := host.Run(ctx, `docker version --format '{{.Server.Version}}/{{.Server.Os}}/{{.Server.Arch}}'`, nil)
 	if err != nil || !strings.Contains(dockerVersion, "/linux/") {
-		appendCheck(&report, "remote-docker-engine", false, "Docker is installed, but the Linux Docker Engine is not running or the remote account is not authorized to reach it.")
+		report.State = "prerequisites-installable"
+		appendCheck(&report, "remote-docker-engine", false, "Docker is installed, but its Engine is stopped or this account lacks access. Ranch Hand can repair the supported Ubuntu/Debian prerequisite setup using sudo.")
 		return report
 	}
 	appendCheck(&report, "remote-docker-engine", true, "The remote account can reach a Linux Docker Engine ("+dockerVersion+").")
 	composeVersion, err := host.Run(ctx, `docker compose version --short`, nil)
 	if err != nil || composeVersion == "" {
-		appendCheck(&report, "remote-docker-compose", false, "Docker Compose v2 is not available to the remote account.")
+		report.State = "prerequisites-installable"
+		appendCheck(&report, "remote-docker-compose", false, "Docker Compose v2 is not available. Ranch Hand can install it on a supported Ubuntu/Debian server using sudo.")
 		return report
 	}
 	appendCheck(&report, "remote-docker-compose", true, "Docker Compose v2 is available ("+composeVersion+").")
@@ -127,6 +130,36 @@ func (a *RemoteLinuxCompose) Preflight(ctx context.Context, candidate plan.Deplo
 	appendCheck(&report, "compose-https-boundary", true, "The evaluation install remains loopback-only on the Linux host and contains no proxy or public ingress.")
 	report.Ready = true
 	return report
+}
+
+func (a *RemoteLinuxCompose) InstallPrerequisites(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) error {
+	if err := candidate.Validate(); err != nil {
+		return err
+	}
+	host, err := a.connect(ctx, candidate, credentials)
+	if err != nil {
+		return err
+	}
+	defer host.Close()
+	user := candidate.Configuration["user"]
+	script := dockerPrerequisiteScript(user)
+	if user == "root" {
+		_, err = host.Run(ctx, "sh -s", []byte(script))
+		return err
+	}
+	if _, sudoErr := host.Run(ctx, "sudo -n true", nil); sudoErr == nil {
+		_, err = host.Run(ctx, "sudo -n sh -s", []byte(script))
+		return err
+	}
+	password := credentials.SudoPassword
+	if password == "" {
+		password = credentials.SSHPassword
+	}
+	if password == "" {
+		return errors.New("Docker installation requires this Linux account's sudo password or passwordless sudo")
+	}
+	_, err = host.Run(ctx, "sudo -S -p '' sh -s", []byte(password+"\n"+script))
+	return err
 }
 
 func connectRemoteLinux(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) (remoteHost, error) {

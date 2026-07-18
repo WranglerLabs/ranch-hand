@@ -51,19 +51,22 @@ func (a *WSLCompose) Preflight(ctx context.Context, candidate plan.DeploymentPla
 	}
 	defer host.Close()
 	if _, err := host.Run(ctx, `command -v docker`, nil); err != nil {
-		appendCheck(&report, "wsl-docker-command", false, "Docker is not installed inside the selected WSL distribution. Install Docker Engine and the Docker Compose v2 plugin there, then retry.")
+		report.State = "prerequisites-installable"
+		appendCheck(&report, "wsl-docker-command", false, "Docker Engine is not installed inside the selected WSL distribution. Ranch Hand can install Docker Engine and Compose on supported Ubuntu/Debian distributions.")
 		return report
 	}
 	appendCheck(&report, "wsl-docker-command", true, "The Docker command is installed inside WSL.")
 	dockerVersion, err := host.Run(ctx, `docker version --format '{{.Server.Version}}/{{.Server.Os}}/{{.Server.Arch}}'`, nil)
 	if err != nil || !strings.Contains(dockerVersion, "/linux/") {
-		appendCheck(&report, "wsl-docker-engine", false, "Docker is installed, but its Linux Docker Engine is not running or the WSL user is not authorized to reach it. Start the service or correct Docker group access, then retry.")
+		report.State = "prerequisites-installable"
+		appendCheck(&report, "wsl-docker-engine", false, "Docker is installed, but its Linux Engine is not running or the WSL user lacks access. Ranch Hand can repair the supported Ubuntu/Debian prerequisite setup.")
 		return report
 	}
 	appendCheck(&report, "wsl-docker-engine", true, "The WSL user can reach Linux Docker Engine "+dockerVersion+".")
 	composeVersion, err := host.Run(ctx, `docker compose version --short`, nil)
 	if err != nil || composeVersion == "" {
-		appendCheck(&report, "wsl-docker-compose", false, "Docker Compose v2 is not available inside the selected WSL distribution.")
+		report.State = "prerequisites-installable"
+		appendCheck(&report, "wsl-docker-compose", false, "Docker Compose v2 is not available. Ranch Hand can install it on supported Ubuntu/Debian distributions.")
 		return report
 	}
 	appendCheck(&report, "wsl-docker-compose", true, "Docker Compose v2 "+composeVersion+" is available inside WSL.")
@@ -91,6 +94,22 @@ func (a *WSLCompose) Preflight(ctx context.Context, candidate plan.DeploymentPla
 	appendCheck(&report, "wsl-loopback", true, "RepoWrangler will use Docker-managed storage and Windows loopback http://127.0.0.1:8080; no WSL path or IP address is required.")
 	report.Ready = true
 	return report
+}
+
+func (a *WSLCompose) InstallPrerequisites(ctx context.Context, candidate plan.DeploymentPlan, _ Credentials) error {
+	if err := candidate.Validate(); err != nil {
+		return err
+	}
+	host, err := connectWSL(ctx, candidate, Credentials{})
+	if err != nil {
+		return err
+	}
+	defer host.Close()
+	user, err := host.Run(ctx, "id -un", nil)
+	if err != nil || !remoteUserPatternForPrerequisites(user) {
+		return errors.New("Ranch Hand could not determine a safe WSL user for Docker group access")
+	}
+	return installWSLDockerPrerequisites(ctx, candidate.Configuration["distribution"], user)
 }
 
 func wslBoundaryMessage(project string, err error) string {

@@ -143,10 +143,22 @@ func TestPinnedSSHHostKeyRejectsMismatch(t *testing.T) {
 }
 
 func TestCredentialsClear(t *testing.T) {
-	credentials := Credentials{AzureAccessToken: "one", CloudflareAPIToken: "two", SSHPrivateKey: "three", SSHPrivateKeyPassphrase: "four", SSHPassword: "five"}
+	credentials := Credentials{AzureAccessToken: "one", CloudflareAPIToken: "two", SSHPrivateKey: "three", SSHPrivateKeyPassphrase: "four", SSHPassword: "five", SudoPassword: "six"}
 	credentials.Clear()
 	if credentials != (Credentials{}) {
 		t.Fatalf("credentials were not cleared: %+v", credentials)
+	}
+}
+
+func TestDockerPrerequisiteScriptIsBoundedAndQuotesUser(t *testing.T) {
+	script := dockerPrerequisiteScript("administrator")
+	for _, required := range []string{"/etc/os-release", "apt-get install --yes docker.io", "docker compose version", "usermod -aG docker 'administrator'"} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("prerequisite script is missing %q", required)
+		}
+	}
+	if remoteUserPatternForPrerequisites("admin; reboot") {
+		t.Fatal("unsafe prerequisite user was accepted")
 	}
 }
 

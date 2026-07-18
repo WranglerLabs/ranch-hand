@@ -170,8 +170,18 @@ func remoteWriteFile(ctx context.Context, host remoteHost, directory, name strin
 
 func remoteComposeCommand(candidate plan.DeploymentPlan, action string) string {
 	directory := candidate.Configuration["installDirectory"]
-	return "docker compose --project-name " + shellQuote(candidate.Configuration["projectName"]) +
-		" --file " + shellQuote(directory+"/compose.yaml") + " --file " + shellQuote(directory+"/ranch-hand.override.yaml") + " " + action
+	// Compose interpolates every service before applying profiles. Ranch Hand's
+	// SQLite evaluation does not start PostgreSQL, but the verified release
+	// intentionally requires this variable for operators who enable that profile.
+	// A process-only sentinel satisfies parsing without creating a database secret
+	// or persisting a usable PostgreSQL credential in the target environment.
+	return "POSTGRES_PASSWORD=ranch-hand-postgres-profile-disabled docker compose --project-name " + shellQuote(candidate.Configuration["projectName"]) +
+		" --env-file " + shellQuote(directory+"/.env") + " --file " + shellQuote(directory+"/compose.yaml") +
+		" --file " + shellQuote(directory+"/ranch-hand.override.yaml") + " " + action
+}
+
+func remoteComposeRecoveryCommand(candidate plan.DeploymentPlan) string {
+	return remoteComposeCommand(candidate, "down --volumes --remove-orphans")
 }
 
 func (a *RemoteLinuxCompose) Verify(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) error {
@@ -341,7 +351,10 @@ func (a *RemoteLinuxCompose) Recover(ctx context.Context, kind lifecycle.Operati
 			return errors.New("refusing to delete a remote volume not owned by this Ranch Hand deployment")
 		}
 	}
-	if _, err := host.Run(ctx, remoteComposeCommand(candidate, "down --volumes --remove-orphans"), nil); err != nil {
+	if output, err := host.Run(ctx, remoteComposeRecoveryCommand(candidate), nil); err != nil {
+		if output != "" {
+			return fmt.Errorf("remove owned failed-install remote Compose project: %w: %s", err, boundedCommandFailure(output))
+		}
 		return fmt.Errorf("remove owned failed-install remote Compose project: %w", err)
 	}
 	directory := candidate.Configuration["installDirectory"]

@@ -71,7 +71,12 @@ existing environment.
 | Local Docker Desktop | Docker Desktop running Linux containers | Windows Docker API, loopback-only demo/SQLite deployment. Full backup, update, restore, rollback, repair, recovery, and rollback-pool retention are available. |
 | Azure Container Apps | An Azure subscription, permission to create a dedicated resource group and ACA resources, and a temporary ARM access token | New resource group, demo mode, SQLite on Azure Files, and Azure-managed HTTPS. Resources can incur Azure charges. Existing groups, PostgreSQL, production credentials, custom domains, and update are not enabled. |
 | Cloudflare | Account ID, unused Worker and D1 names, a workers.dev subdomain, and a scoped API token with account read, Workers Scripts write, and D1 write access | New Worker and D1 database in demo mode with Cloudflare-managed workers.dev HTTPS. Existing resources, custom domains, production secrets, backup, and update are not enabled. |
-| Remote Linux Docker Compose | Existing Linux host, Docker Engine, Docker Compose v2, an account allowed to use them, and an SSH private key or password | SSH port and project are prefilled; entering the SSH user fills that user's default installation directory. **Inspect server host key** reads the fingerprint without sending credentials; verify it against the Azure/server console or administrator before selecting **Use verified fingerprint**. New dedicated project remains bound to remote loopback. Ranch Hand does not install public ingress, a proxy, Docker, or Linux. Backup and update are not enabled. |
+| Remote Linux Docker Compose | Existing Linux host, Docker Engine, Docker Compose v2, an account allowed to use them, and an SSH password or private key | SSH port and project are prefilled; entering the user fills its default installation directory. The normal flow gets and trusts the first-seen server fingerprint, then shows one password field by default; private-key and manual/out-of-band fingerprint verification are advanced choices. The successful credential is reused for installation only in memory. New dedicated project remains bound to remote loopback. Ranch Hand does not install public ingress, a proxy, Docker, or Linux. Backup and update are not enabled. |
+
+Azure, Cloudflare, and Remote Linux credentials are entered once for live
+preflight. After a successful check, Ranch Hand retains the credential only in
+the running loopback session through installation. Failed credentials remain in
+the form for correction. Docker Desktop requires no deployment credential.
 
 The Azure RC currently accepts an operator-supplied ARM token; integrated Azure
 interactive sign-in is still open work. Obtain and handle that token using your

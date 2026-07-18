@@ -6,6 +6,42 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.16] - 2026-07-18
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Changed
+
+- Remote Linux's normal server-identity path is now **Get server fingerprint**
+  followed by **Trust this server key**. Manual fingerprint entry and
+  out-of-band verification remain available under advanced options.
+- Remote authentication defaults to a clear **Username and password** choice
+  and shows only the password field. Selecting **SSH private key** shows only
+  the key and optional key-passphrase fields.
+- The live check identifies the exact `user@host:port` connection and uses the
+  direct **Test SSH connection and target** action.
+- A successful preflight credential is retained only in the running local
+  session for installation, eliminating duplicate password or token entry for
+  Remote Linux, Azure Container Apps, and Cloudflare. Failed preflight and
+  installation credentials remain in the local form for correction instead of
+  disappearing.
+- Azure and Cloudflare installation panels now summarize the target that
+  passed preflight and proceed with the already validated in-memory token.
+- Docker Desktop was verified to require no deployment credential and retains
+  its direct named-pipe preflight-to-install path.
+
+### Fixed
+
+- SSH host-key mismatch and Linux authentication rejection now produce
+  distinct errors. Authentication errors name the selected Linux user and
+  explain whether to use the password or private key accepted by SSH itself.
+
+### Verification
+
+- Full Go test suite passes.
+- The React application passes TypeScript checking and production build.
+
 ## [0.1.0-rc.15] - 2026-07-18
 
 **Classification: Public Preview.** Publicly downloadable and intended for

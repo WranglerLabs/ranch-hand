@@ -135,9 +135,19 @@ func connectRemoteLinux(ctx context.Context, candidate plan.DeploymentPlan, cred
 		return nil, err
 	}
 	address := net.JoinHostPort(candidate.Configuration["host"], candidate.Configuration["port"])
+	expectedFingerprint := candidate.Configuration["hostKeySha256"]
+	presentedFingerprint := ""
+	hostIdentityVerified := false
 	config := &ssh.ClientConfig{
 		User: candidate.Configuration["user"], Auth: auth, Timeout: 30 * time.Second,
-		HostKeyCallback: pinnedHostKey(candidate.Configuration["hostKeySha256"]),
+		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+			presentedFingerprint = ssh.FingerprintSHA256(key)
+			if presentedFingerprint != expectedFingerprint {
+				return errors.New("SSH host identity does not match the deployment plan")
+			}
+			hostIdentityVerified = true
+			return nil
+		},
 	}
 	dialer := &net.Dialer{Timeout: 30 * time.Second}
 	connection, err := dialer.DialContext(ctx, "tcp", address)
@@ -148,7 +158,13 @@ func connectRemoteLinux(ctx context.Context, candidate plan.DeploymentPlan, cred
 	clientConnection, channels, requests, err := ssh.NewClientConn(connection, address, config)
 	if err != nil {
 		_ = connection.Close()
-		return nil, errors.New("SSH authentication or pinned host identity verification failed")
+		if presentedFingerprint != "" && !hostIdentityVerified {
+			return nil, fmt.Errorf("SSH host identity mismatch: the server presented %s but the deployment plan pins %s", presentedFingerprint, expectedFingerprint)
+		}
+		if hostIdentityVerified {
+			return nil, fmt.Errorf("SSH authentication failed for Linux user %q after the pinned server identity was verified; use the password accepted by SSH itself or select the private key SSH normally uses", candidate.Configuration["user"])
+		}
+		return nil, errors.New("the SSH handshake failed before Ranch Hand could verify the server identity")
 	}
 	_ = connection.SetDeadline(time.Time{})
 	return &sshRemoteHost{client: ssh.NewClient(clientConnection, channels, requests), connection: connection}, nil

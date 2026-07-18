@@ -51,6 +51,8 @@ func newFakeRemoteHost() *fakeRemoteHost { return &fakeRemoteHost{files: make(ma
 func (h *fakeRemoteHost) Run(_ context.Context, command string, stdin []byte) (string, error) {
 	h.commands = append(h.commands, command)
 	switch {
+	case command == "command -v docker":
+		return "/usr/bin/docker", nil
 	case strings.HasPrefix(command, "docker version --format"):
 		return "29.0.0/linux/amd64", nil
 	case command == "docker compose version --short":
@@ -89,7 +91,7 @@ func (h *fakeRemoteHost) Run(_ context.Context, command string, stdin []byte) (s
 			return "", nil
 		}
 		for name := range h.files {
-			known := name == "compose.yaml" || name == "compose.yaml.ranch-hand-tmp" || name == "ranch-hand.override.yaml" || name == "ranch-hand.override.yaml.ranch-hand-tmp" || name == ".env" || name == ".env.ranch-hand-tmp" || name == remoteMarkerName+".ranch-hand-tmp"
+			known := name == "compose.yaml" || name == "compose.yaml.ranch-hand-tmp" || name == "ranch-hand.override.yaml" || name == "ranch-hand.override.yaml.ranch-hand-tmp" || name == ".env" || name == ".env.ranch-hand-tmp" || name == remoteMarkerName+".ranch-hand-tmp" || (name == remoteMarkerName && len(h.files[name]) == 0 && strings.Contains(command, "test ! -s"))
 			if !known {
 				return "", errors.New("directory contains unknown content")
 			}
@@ -243,6 +245,18 @@ func TestRemoteRecoveryRemovesOnlyEmptyPreMarkerDirectory(t *testing.T) {
 	}
 
 	host.directory = true
+	host.files["compose.yaml"] = []byte{}
+	host.files["ranch-hand.override.yaml"] = []byte{}
+	host.files[".env"] = []byte{}
+	host.files[remoteMarkerName] = []byte{}
+	if err := adapter.Recover(context.Background(), lifecycle.Install, remoteEvaluationPlan(), "", lifecycle.OperationBackups{}, Credentials{SSHPassword: "runtime-only"}); err != nil {
+		t.Fatal(err)
+	}
+	if host.directory || len(host.files) != 0 {
+		t.Fatal("legacy empty-marker recovery did not remove the exact empty transfer files")
+	}
+
+	host.directory = true
 	host.files["unknown"] = []byte("do not remove")
 	if err := adapter.Recover(context.Background(), lifecycle.Install, remoteEvaluationPlan(), "", lifecycle.OperationBackups{}, Credentials{SSHPassword: "runtime-only"}); err == nil || !host.directory || len(host.files) != 1 {
 		t.Fatal("pre-marker recovery removed or accepted a non-empty directory")
@@ -252,5 +266,12 @@ func TestRemoteRecoveryRemovesOnlyEmptyPreMarkerDirectory(t *testing.T) {
 	host.resources = true
 	if err := adapter.Recover(context.Background(), lifecycle.Install, remoteEvaluationPlan(), "", lifecycle.OperationBackups{}, Credentials{SSHPassword: "runtime-only"}); err == nil || !host.directory || !host.resources {
 		t.Fatal("pre-marker recovery accepted a project with Docker resources")
+	}
+}
+
+func TestRemoteShellScriptPipesPayloadToWholeCompoundCommand(t *testing.T) {
+	script := remoteShellScript("umask 077; cat > '/tmp/compose.yaml'", []byte("services:\n"))
+	if !strings.Contains(script, "| ( umask 077; cat > '/tmp/compose.yaml' )") {
+		t.Fatalf("payload was not piped to the compound command subshell: %s", script)
 	}
 }

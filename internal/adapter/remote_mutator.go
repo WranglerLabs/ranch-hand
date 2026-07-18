@@ -28,6 +28,7 @@ var (
 	errComposeContainersExist        = errors.New("refusing to replace a Compose project with existing containers")
 	errComposeVolumesExist           = errors.New("refusing to replace a Compose project with existing volumes")
 	errRemoteMarkerUnavailable       = errors.New("remote Ranch Hand ownership marker is unavailable")
+	errRemoteMarkerEmpty             = errors.New("remote Ranch Hand ownership marker is empty")
 )
 
 type remoteInstallation struct {
@@ -106,7 +107,10 @@ func (a *RemoteLinuxCompose) Apply(ctx context.Context, kind lifecycle.Operation
 			return fmt.Errorf("transfer %s: %w", file.name, err)
 		}
 	}
-	if _, err := host.Run(ctx, remoteComposeCommand(candidate, "up --detach --pull always server"), nil); err != nil {
+	if output, err := host.Run(ctx, remoteComposeCommand(candidate, "up --detach --pull always server"), nil); err != nil {
+		if output != "" {
+			return fmt.Errorf("start remote evaluation project: %w: %s", err, boundedCommandFailure(output))
+		}
 		return fmt.Errorf("start remote evaluation project: %w", err)
 	}
 	return nil
@@ -194,6 +198,9 @@ func readRemoteMarker(ctx context.Context, host remoteHost, candidate plan.Deplo
 	contents, err := host.Run(ctx, "cat -- "+shellQuote(directory+"/"+remoteMarkerName), nil)
 	if err != nil {
 		return remoteInstallation{}, errRemoteMarkerUnavailable
+	}
+	if contents == "" {
+		return remoteInstallation{}, errRemoteMarkerEmpty
 	}
 	var marker remoteInstallation
 	decoder := json.NewDecoder(strings.NewReader(contents))
@@ -306,7 +313,7 @@ func (a *RemoteLinuxCompose) Recover(ctx context.Context, kind lifecycle.Operati
 	defer host.Close()
 	marker, err := readRemoteMarker(ctx, host, candidate)
 	if err != nil {
-		if errors.Is(err, errRemoteMarkerUnavailable) && recoverRemoteBeforeMarker(ctx, host, candidate) == nil {
+		if (errors.Is(err, errRemoteMarkerUnavailable) || errors.Is(err, errRemoteMarkerEmpty)) && recoverRemoteBeforeMarker(ctx, host, candidate, errors.Is(err, errRemoteMarkerEmpty)) == nil {
 			return nil
 		}
 		return errors.New("refusing remote cleanup without the exact Ranch Hand ownership marker")
@@ -344,7 +351,7 @@ func (a *RemoteLinuxCompose) Recover(ctx context.Context, kind lifecycle.Operati
 	return nil
 }
 
-func recoverRemoteBeforeMarker(ctx context.Context, host remoteHost, candidate plan.DeploymentPlan) error {
+func recoverRemoteBeforeMarker(ctx context.Context, host remoteHost, candidate plan.DeploymentPlan, removeEmptyMarker bool) error {
 	project := candidate.Configuration["projectName"]
 	containerIDs, err := host.Run(ctx, "docker ps --all --quiet --filter "+shellQuote("name=^/"+project+"-server$"), nil)
 	if err != nil || containerIDs != "" {
@@ -355,12 +362,30 @@ func recoverRemoteBeforeMarker(ctx context.Context, host remoteHost, candidate p
 		return errors.New("pre-marker recovery found a Compose volume")
 	}
 	directory := candidate.Configuration["installDirectory"]
+	markerCleanup := ""
+	if removeEmptyMarker {
+		marker := shellQuote(directory + "/" + remoteMarkerName)
+		markerCleanup = "test -f " + marker + " && test ! -s " + marker + " && rm --force -- " + marker + " && "
+	}
 	command := "if [ ! -e " + shellQuote(directory) + " ]; then exit 0; fi; " +
-		"test -d " + shellQuote(directory) + " && test ! -L " + shellQuote(directory) + " && rm --force -- " +
+		"test -d " + shellQuote(directory) + " && test ! -L " + shellQuote(directory) + " && " + markerCleanup + "rm --force -- " +
 		shellQuote(directory+"/compose.yaml") + " " + shellQuote(directory+"/compose.yaml.ranch-hand-tmp") + " " +
 		shellQuote(directory+"/ranch-hand.override.yaml") + " " + shellQuote(directory+"/ranch-hand.override.yaml.ranch-hand-tmp") + " " +
 		shellQuote(directory+"/.env") + " " + shellQuote(directory+"/.env.ranch-hand-tmp") + " " +
 		shellQuote(directory+"/"+remoteMarkerName+".ranch-hand-tmp") + " && rmdir -- " + shellQuote(directory)
 	_, err = host.Run(ctx, command, nil)
 	return err
+}
+
+func boundedCommandFailure(output string) string {
+	output = strings.Map(func(character rune) rune {
+		if character == '\n' || character == '\t' || character >= 0x20 {
+			return character
+		}
+		return -1
+	}, strings.TrimSpace(output))
+	if len(output) > 4096 {
+		return output[:4096] + "…"
+	}
+	return output
 }

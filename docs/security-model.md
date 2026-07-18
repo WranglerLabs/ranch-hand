@@ -7,6 +7,9 @@ separate from RepoWrangler, which remains read-only toward repository providers.
 
 - The API binds only to a random IPv4 loopback port.
 - Each process creates a cryptographically random one-time launch token.
+- The browser removes that token from the address bar and retains it only in
+  same-origin, same-tab `sessionStorage`, so refresh works but closing the tab
+  clears the browser copy.
 - The token is delivered in the browser URL fragment, removed from browser
   history, and required for every API request.
 - Mutations require same-origin requests. Responses are non-cacheable and the UI

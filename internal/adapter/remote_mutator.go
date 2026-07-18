@@ -68,6 +68,12 @@ func (a *RemoteLinuxCompose) Apply(ctx context.Context, kind lifecycle.Operation
 		return err
 	}
 	defer host.Close()
+	if output, err := host.Run(ctx, "docker image pull "+shellQuote(identity.Image), nil); err != nil {
+		if output != "" {
+			return fmt.Errorf("pull verified release image before target mutation: %w: %s", err, boundedCommandFailure(output))
+		}
+		return fmt.Errorf("pull verified release image before target mutation: %w", err)
+	}
 	if err := remoteBoundaryAvailable(ctx, host, candidate); err != nil {
 		return err
 	}
@@ -107,7 +113,7 @@ func (a *RemoteLinuxCompose) Apply(ctx context.Context, kind lifecycle.Operation
 			return fmt.Errorf("transfer %s: %w", file.name, err)
 		}
 	}
-	if output, err := host.Run(ctx, remoteComposeCommand(candidate, "up --detach --pull always server"), nil); err != nil {
+	if output, err := host.Run(ctx, remoteComposeCommand(candidate, "up --detach --pull never server"), nil); err != nil {
 		if output != "" {
 			return fmt.Errorf("start remote evaluation project: %w: %s", err, boundedCommandFailure(output))
 		}

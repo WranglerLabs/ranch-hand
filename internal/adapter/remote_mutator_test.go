@@ -43,6 +43,7 @@ type fakeRemoteHost struct {
 	resources   bool
 	composeDown bool
 	unowned     bool
+	pullError   bool
 	commands    []string
 }
 
@@ -57,6 +58,11 @@ func (h *fakeRemoteHost) Run(_ context.Context, command string, stdin []byte) (s
 		return "29.0.0/linux/amd64", nil
 	case command == "docker compose version --short":
 		return "2.40.0", nil
+	case strings.HasPrefix(command, "docker image pull "):
+		if h.pullError {
+			return "error from registry: unauthorized", errors.New("exit status 1")
+		}
+		return "pulled", nil
 	case strings.HasPrefix(command, "test ! -e "):
 		if h.directory {
 			return "", errors.New("exists")
@@ -73,7 +79,7 @@ func (h *fakeRemoteHost) Run(_ context.Context, command string, stdin []byte) (s
 			}
 		}
 		return "", errors.New("unknown transfer")
-	case strings.Contains(command, "docker compose") && strings.HasSuffix(command, "up --detach --pull always server"):
+	case strings.Contains(command, "docker compose") && strings.HasSuffix(command, "up --detach --pull never server"):
 		if !strings.HasPrefix(command, "POSTGRES_PASSWORD=ranch-hand-postgres-profile-disabled ") || !strings.Contains(command, " --env-file ") {
 			return "required variable POSTGRES_PASSWORD is missing a value", errors.New("compose interpolation failed")
 		}
@@ -211,6 +217,19 @@ func TestRemoteEvaluationInstallTransfersVerifiedBundleAndChecksIdentity(t *test
 	}
 	if err := adapter.Verify(context.Background(), candidate, credentials); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRemoteEvaluationInstallPullsBeforeCreatingTargetBoundary(t *testing.T) {
+	host := newFakeRemoteHost()
+	host.pullError = true
+	adapter := newRemoteLinuxCompose(func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error) { return host, nil })
+	err := adapter.Apply(context.Background(), lifecycle.Install, remoteEvaluationPlan(), "", stagedRemoteBundle(t), lifecycle.OperationBackups{}, Credentials{SSHPassword: "runtime-only"})
+	if err == nil || !strings.Contains(err.Error(), "pull verified release image before target mutation") || !strings.Contains(err.Error(), "unauthorized") {
+		t.Fatalf("registry failure was not reported at the pre-mutation boundary: %v", err)
+	}
+	if host.directory || host.resources || len(host.files) != 0 {
+		t.Fatal("registry failure created installation files or Docker resources")
 	}
 }
 

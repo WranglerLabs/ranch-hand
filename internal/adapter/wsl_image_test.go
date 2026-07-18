@@ -13,7 +13,7 @@ import (
 
 func TestCompanionImageTrustRecordsSupportCurrentAndPriorRelease(t *testing.T) {
 	current, err := companionForImage(repoWranglerV1012Companion.image)
-	if err != nil || current.runtimeImage != "repo-wrangler-ranch-hand:v1.0.12" || current.imageID != "sha256:0882c997a463d41b3cd551208de805bd3fdfd5cb8cf3ea3a11ef96a088327215" {
+	if err != nil || current.runtimeImage != "repo-wrangler-ranch-hand:v1.0.12" || len(current.imageIDs) != 3 {
 		t.Fatalf("current RepoWrangler companion trust record is invalid: %#v %v", current, err)
 	}
 	prior, err := companionForImage(repoWranglerV1010Companion.image)
@@ -22,6 +22,19 @@ func TestCompanionImageTrustRecordsSupportCurrentAndPriorRelease(t *testing.T) {
 	}
 	if _, err := companionForImage("ghcr.io/wranglerlabs/repo-wrangler-server@sha256:" + strings.Repeat("f", 64)); err == nil {
 		t.Fatal("unknown RepoWrangler image unexpectedly received a companion trust record")
+	}
+}
+
+func TestCompanionLoadedImageAcceptsOnlyVerifiedEngineIdentities(t *testing.T) {
+	for _, companion := range []companionImage{repoWranglerV1010Companion, repoWranglerV1012Companion} {
+		for _, identity := range companion.imageIDs {
+			if !companionLoadedImageMatches(companion, identity+"\n") {
+				t.Fatalf("verified image identity was rejected: %s", identity)
+			}
+		}
+		if companionLoadedImageMatches(companion, "sha256:"+strings.Repeat("f", 64)) {
+			t.Fatalf("unknown image identity was accepted for %s", companion.runtimeImage)
+		}
 	}
 }
 

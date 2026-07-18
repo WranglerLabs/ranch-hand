@@ -18,6 +18,7 @@ type companionImage struct {
 	image        string
 	runtimeImage string
 	imageID      string
+	imageIDs     []string
 	url          string
 	sha256       string
 	size         int64
@@ -27,18 +28,41 @@ var repoWranglerV1010Companion = companionImage{
 	image:        "ghcr.io/wranglerlabs/repo-wrangler-server@sha256:89d1b4091137eef57c91270d363fb6c76e6d60c94dcac92b129b2b8629f45093",
 	runtimeImage: "repo-wrangler-server:v1.0.10-ranch-hand",
 	imageID:      "sha256:89d1b4091137eef57c91270d363fb6c76e6d60c94dcac92b129b2b8629f45093",
-	url:          "https://github.com/WranglerLabs/ranch-hand/releases/download/v0.1.0-rc.13/repo-wrangler-v1.0.10-linux-amd64-image.tar.gz",
-	sha256:       "bc2c7507b592a6da58ec1eeed199d2c3b028bdb6a6b73f22a00ff7aab46ada5e",
-	size:         286575554,
+	imageIDs: []string{
+		"sha256:89d1b4091137eef57c91270d363fb6c76e6d60c94dcac92b129b2b8629f45093",
+		"sha256:380b6b16376f80cfca0fa7a989d5ad6b6eec93ed280f08ceaedad32078b04cdf",
+		"sha256:b38ecd852041ddbc02749a5d5d0362d12aa2b8dd42d4b330499e31069525b18c",
+	},
+	url:    "https://github.com/WranglerLabs/ranch-hand/releases/download/v0.1.0-rc.13/repo-wrangler-v1.0.10-linux-amd64-image.tar.gz",
+	sha256: "bc2c7507b592a6da58ec1eeed199d2c3b028bdb6a6b73f22a00ff7aab46ada5e",
+	size:   286575554,
 }
 
 var repoWranglerV1012Companion = companionImage{
 	image:        "ghcr.io/wranglerlabs/repo-wrangler-server@sha256:e4006a552ec2ece536bc737f6595bdbf8dc32d99f29c888fe9d06d5e09acffd7",
 	runtimeImage: "repo-wrangler-ranch-hand:v1.0.12",
 	imageID:      "sha256:0882c997a463d41b3cd551208de805bd3fdfd5cb8cf3ea3a11ef96a088327215",
-	url:          "https://github.com/WranglerLabs/repo-wrangler/releases/download/v1.0.12/repo-wrangler-v1.0.12-linux-amd64-image.tar.gz",
-	sha256:       "213773b172305e9ea6c8c700034b02f991632973908ac1524bb84a23d4ac870c",
-	size:         280769404,
+	imageIDs: []string{
+		"sha256:e4006a552ec2ece536bc737f6595bdbf8dc32d99f29c888fe9d06d5e09acffd7",
+		"sha256:ddbed2c10d55733f40211cd2b7e2597839d878c9a97bbd59af68168fee656895",
+		"sha256:0882c997a463d41b3cd551208de805bd3fdfd5cb8cf3ea3a11ef96a088327215",
+	},
+	url:    "https://github.com/WranglerLabs/repo-wrangler/releases/download/v1.0.12/repo-wrangler-v1.0.12-linux-amd64-image.tar.gz",
+	sha256: "213773b172305e9ea6c8c700034b02f991632973908ac1524bb84a23d4ac870c",
+	size:   280769404,
+}
+
+func companionLoadedImageMatches(companion companionImage, loaded string) bool {
+	loaded = strings.TrimSpace(loaded)
+	if loaded == companion.imageID {
+		return true
+	}
+	for _, expected := range companion.imageIDs {
+		if loaded == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func companionForImage(image string) (companionImage, error) {
@@ -150,7 +174,7 @@ func prepareWSLCompanion(ctx context.Context, distribution, image string) (strin
 	if err != nil {
 		return "", err
 	}
-	if err := loadWSLImageArchive(ctx, distribution, archive, companion.runtimeImage, companion.imageID); err != nil {
+	if err := loadWSLImageArchive(ctx, distribution, archive, companion); err != nil {
 		return "", err
 	}
 	return companion.runtimeImage, nil

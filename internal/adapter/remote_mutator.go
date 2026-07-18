@@ -357,7 +357,7 @@ func verifyRemoteResources(ctx context.Context, host remoteHost, marker remoteIn
 	if marker.RuntimeImage != "" {
 		companion, companionErr := companionForImage(marker.Image)
 		imageID, imageErr := host.Run(ctx, "docker container inspect --format '{{.Image}}' "+shellQuote(marker.ContainerName), nil)
-		if companionErr != nil || imageErr != nil || imageID != companion.imageID {
+		if companionErr != nil || imageErr != nil || !companionLoadedImageMatches(companion, imageID) {
 			return errors.New("remote container runtime image ID does not match the verified immutable image")
 		}
 	}

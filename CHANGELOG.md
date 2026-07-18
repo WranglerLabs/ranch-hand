@@ -6,6 +6,28 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.23] - 2026-07-18
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Added
+
+- Active local WSL Compose deployments now expose a managed permanent-removal
+  action directly in the lifecycle inventory. Ranch Hand requires explicit
+  data-deletion confirmation, revalidates the exact ownership marker, file
+  hashes, container and volume labels, removes the Compose project and owned
+  directory, and commits the inventory record as uninstalled.
+- Interrupted removals retain their durable lifecycle lock and can retry the
+  same ownership-safe, idempotent cleanup through the existing recovery UI.
+
+### Verification
+
+- Full Go test suite passes, including coordinator and API uninstall coverage.
+- `go vet ./...` passes.
+- React TypeScript checking and production build pass.
+- Windows AMD64 executable compilation passes.
+
 ## [0.1.0-rc.22] - 2026-07-18
 
 **Classification: Public Preview.** Publicly downloadable and intended for

@@ -161,6 +161,22 @@ func (a *WSLCompose) Apply(ctx context.Context, kind lifecycle.OperationKind, ca
 	if err := candidate.Validate(); err != nil {
 		return err
 	}
+	if kind == lifecycle.Uninstall {
+		if backups.Selected != nil || backups.Safety != nil {
+			return errors.New("local WSL uninstall does not accept backup state")
+		}
+		normalized, err := a.normalized(ctx, candidate)
+		if err != nil {
+			return err
+		}
+		if err := a.delegate.CleanupRemnant(ctx, normalized, credentials); err != nil {
+			return err
+		}
+		// Repeat the ownership-safe cleanup as an idempotent absence check. It
+		// succeeds only when the project resources and installation directory are
+		// now gone, and refuses any unexpected replacement content.
+		return a.delegate.CleanupRemnant(ctx, normalized, credentials)
+	}
 	identity, err := bundle.ReadIdentity(staged)
 	if err != nil {
 		return err
@@ -189,6 +205,12 @@ func (a *WSLCompose) Recover(ctx context.Context, kind lifecycle.OperationKind, 
 	normalized, err := a.normalized(ctx, candidate)
 	if err != nil {
 		return err
+	}
+	if kind == lifecycle.Uninstall {
+		if backups.Selected != nil || backups.Safety != nil {
+			return errors.New("local WSL uninstall recovery does not accept backup state")
+		}
+		return a.delegate.CleanupRemnant(ctx, normalized, credentials)
 	}
 	return a.delegate.Recover(ctx, kind, normalized, fromVersion, backups, credentials)
 }

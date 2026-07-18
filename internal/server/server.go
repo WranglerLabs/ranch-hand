@@ -148,6 +148,7 @@ func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, 
 	mux.Handle("GET /api/v1/operations/active", s.authorize(http.HandlerFunc(s.listActiveOperations)))
 	mux.Handle("POST /api/v1/operations/{deploymentID}/recover", s.authorize(http.HandlerFunc(s.recoverActiveOperation)))
 	mux.Handle("GET /api/v1/installations", s.authorize(http.HandlerFunc(s.listInstallations)))
+	mux.Handle("POST /api/v1/installations/{deploymentID}/uninstall", s.authorize(http.HandlerFunc(s.uninstallInstallation)))
 	mux.Handle("GET /api/v1/installations/{deploymentID}/backups", s.authorize(http.HandlerFunc(s.listBackups)))
 	mux.Handle("GET /api/v1/installations/{deploymentID}/rollback-pool", s.authorize(http.HandlerFunc(s.listRollbackPool)))
 	mux.Handle("POST /api/v1/installations/{deploymentID}/rollback-pool/prune", s.authorize(http.HandlerFunc(s.pruneRollbackPool)))
@@ -506,6 +507,69 @@ func (s *Server) runOperation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := s.coordinator.Run(r.Context(), operations.Request{Kind: request.Kind, Plan: request.Plan, FromVersion: request.FromVersion, BackupID: request.BackupID, Artifact: verified, Credentials: request.Credentials})
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": err.Error(), "operation": result})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"completed": true, "operation": result})
+}
+
+func (s *Server) uninstallInstallation(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request rejected"})
+		return
+	}
+	if s.coordinator == nil || s.installations == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "managed uninstall is unavailable"})
+		return
+	}
+	var request struct {
+		Confirmed   bool                `json:"confirmed"`
+		DeleteData  bool                `json:"deleteData"`
+		Credentials adapter.Credentials `json:"credentials"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxTargetRequestSize))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid managed uninstall request"})
+		return
+	}
+	defer request.Credentials.Clear()
+	if !request.Confirmed || !request.DeleteData {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "permanent WSL removal requires confirmation that deployment data will be deleted"})
+		return
+	}
+	if err := request.Credentials.Validate(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	deploymentID := r.PathValue("deploymentID")
+	record, err := s.installations.Installation(deploymentID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "managed deployment was not found"})
+			return
+		}
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "installation inventory could not be read safely"})
+		return
+	}
+	if record.State != lifecycle.InstallationActive || record.Target != "local-wsl-compose" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "managed uninstall is currently enabled only for an active local WSL Compose deployment"})
+		return
+	}
+	candidate, err := plan.DecodeAndValidate(record.Plan)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "the recorded deployment plan is invalid"})
+		return
+	}
+	identity, err := lifecycle.DeploymentID(candidate)
+	if err != nil || identity != deploymentID || candidate.Release.Version != record.Version {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "the installation record does not match its deployment identity"})
+		return
+	}
+	result, err := s.coordinator.Run(r.Context(), operations.Request{
+		Kind: lifecycle.Uninstall, Plan: candidate, FromVersion: record.Version, Credentials: request.Credentials,
+	})
 	if err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": err.Error(), "operation": result})
 		return

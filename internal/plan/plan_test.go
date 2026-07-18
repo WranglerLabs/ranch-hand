@@ -94,12 +94,17 @@ func TestValidatesRemoteLinuxBoundary(t *testing.T) {
 	}
 	candidate.Target.Kind = "remote-linux-compose"
 	candidate.Configuration = map[string]string{
-		"host": "server.example.com", "port": "22", "user": "repo-wrangler", "installDirectory": "/opt/repo-wrangler",
-		"projectName": "repo-wrangler", "hostKeySha256": "SHA256:" + "Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"host": "192.168.1.165", "port": "22", "user": "repo-wrangler", "installDirectory": "/opt/repo-wrangler",
+		"projectName": "repo-wrangler", "hostKeySha256": "SHA256:" + "Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "accessMode": "private-lan",
 	}
 	if err := candidate.Validate(); err != nil {
 		t.Fatalf("valid remote Linux boundary rejected: %v", err)
 	}
+	candidate.Configuration["host"] = "203.0.113.10"
+	if err := candidate.Validate(); err == nil {
+		t.Fatal("public HTTP remote Linux target was accepted")
+	}
+	candidate.Configuration["host"] = "192.168.1.165"
 	candidate.Configuration["installDirectory"] = "/"
 	candidate.Configuration["hostKeySha256"] = "accept-any-host"
 	if err := candidate.Validate(); err == nil {

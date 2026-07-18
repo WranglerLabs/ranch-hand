@@ -97,7 +97,8 @@
       "properties": {
         "host": { "$ref": "#/$defs/value" }, "port": { "$ref": "#/$defs/value" },
         "user": { "$ref": "#/$defs/value" }, "installDirectory": { "$ref": "#/$defs/value" },
-        "projectName": { "$ref": "#/$defs/value" }, "hostKeySha256": { "$ref": "#/$defs/value" }
+        "projectName": { "$ref": "#/$defs/value" }, "hostKeySha256": { "$ref": "#/$defs/value" },
+        "accessMode": { "enum": ["loopback", "private-lan"] }
       }
     },
     "value": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[^\\r\\n\\u0000]+$" }

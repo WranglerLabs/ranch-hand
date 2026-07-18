@@ -36,6 +36,7 @@ type remoteConnector func(context.Context, plan.DeploymentPlan, Credentials) (re
 type RemoteLinuxCompose struct {
 	connect             remoteConnector
 	prepareReleaseImage func(context.Context, plan.DeploymentPlan, Credentials, string) (string, error)
+	verifyRemoteAccess  func(context.Context, plan.DeploymentPlan, string) error
 }
 
 type SSHHostIdentity struct {
@@ -77,13 +78,13 @@ func InspectSSHHostKey(ctx context.Context, host, port string) (SSHHostIdentity,
 }
 
 func NewRemoteLinuxCompose() *RemoteLinuxCompose {
-	adapter := &RemoteLinuxCompose{connect: connectRemoteLinux}
+	adapter := &RemoteLinuxCompose{connect: connectRemoteLinux, verifyRemoteAccess: verifyRemoteLANHealth}
 	adapter.prepareReleaseImage = adapter.prepareRemoteCompanion
 	return adapter
 }
 
 func newRemoteLinuxCompose(connect remoteConnector) *RemoteLinuxCompose {
-	adapter := &RemoteLinuxCompose{connect: connect}
+	adapter := &RemoteLinuxCompose{connect: connect, verifyRemoteAccess: func(context.Context, plan.DeploymentPlan, string) error { return nil }}
 	// This constructor is used by the WSL delegate and adapter tests. WSL calls
 	// apply only after loading and verifying its companion image. Tests replace
 	// this resolver when they exercise the real archive-transfer preparation.
@@ -146,7 +147,11 @@ func (a *RemoteLinuxCompose) Preflight(ctx context.Context, candidate plan.Deplo
 		return report
 	}
 	appendCheck(&report, "remote-compose-boundary", true, "The requested Compose project has no existing containers or volumes.")
-	appendCheck(&report, "compose-https-boundary", true, "The evaluation install remains loopback-only on the Linux host and contains no proxy or public ingress.")
+	if candidate.Configuration["accessMode"] == "private-lan" {
+		appendCheck(&report, "compose-private-network-boundary", true, "RepoWrangler will listen on port 8080 at the selected private IPv4 address. Ranch Hand does not expose public Internet ingress or install a proxy.")
+	} else {
+		appendCheck(&report, "compose-loopback-boundary", true, "This legacy plan remains loopback-only on the Linux host. Create a new private-LAN plan for direct access from another computer.")
+	}
 	report.Ready = true
 	return report
 }

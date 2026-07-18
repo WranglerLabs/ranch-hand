@@ -6,6 +6,19 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+### Fixed
+
+- Remote Linux plans now default to direct private-LAN access, bind the managed
+  service on port 8080, set the matching RepoWrangler base URL, verify that the
+  endpoint is reachable from the Windows control workstation, and present the
+  exact clickable server URL after commit. Plain-HTTP public-IP targets remain
+  rejected; legacy loopback plans retain their original meaning.
+- WSL remains Windows-loopback-only and is covered by a regression test that
+  prevents Remote Linux network settings from crossing into the local target.
+- WSL and Remote Linux installs now verify the SPA shell and its referenced
+  JavaScript asset in addition to health and release identity, preventing a
+  missing web bundle from being reported as a successful installation.
+
 ## [0.1.0-rc.19] - 2026-07-18
 
 **Classification: Public Preview.** Publicly downloadable and intended for

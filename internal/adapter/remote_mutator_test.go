@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -21,8 +22,8 @@ import (
 
 func remoteEvaluationPlan() plan.DeploymentPlan {
 	return targetPlan("remote-linux-compose", map[string]string{
-		"host": "server.example.com", "port": "22", "user": "repo-wrangler", "installDirectory": "/opt/repo-wrangler",
-		"projectName": "repo-wrangler", "hostKeySha256": "SHA256:" + strings.Repeat("A", 43),
+		"host": "192.168.1.165", "port": "22", "user": "repo-wrangler", "installDirectory": "/opt/repo-wrangler",
+		"projectName": "repo-wrangler", "hostKeySha256": "SHA256:" + strings.Repeat("A", 43), "accessMode": "private-lan",
 	})
 }
 
@@ -217,6 +218,12 @@ func (h *fakeRemoteHost) Health(_ context.Context, path string) (int, []byte, er
 	if path == "/health/live" {
 		return http.StatusOK, []byte(`{"ok":true,"version":"v1.2.3"}`), nil
 	}
+	if path == "/" {
+		return http.StatusOK, []byte(`<!doctype html><div id="root"></div><script type="module" src="/assets/index-test.js"></script>`), nil
+	}
+	if path == "/assets/index-test.js" {
+		return http.StatusOK, bytes.Repeat([]byte("x"), 1024), nil
+	}
 	return http.StatusOK, []byte(`{"ok":true}`), nil
 }
 
@@ -234,11 +241,19 @@ func TestRemoteEvaluationInstallTransfersVerifiedBundleAndChecksIdentity(t *test
 		t.Fatal("remote install did not create its dedicated files and Docker resources")
 	}
 	environment := string(host.files[".env"])
-	if strings.Contains(environment, credentials.SSHPassword) || !strings.Contains(environment, "BIND_ADDRESS=127.0.0.1") || strings.Contains(environment, "POSTGRES_PASSWORD=") {
-		t.Fatal("remote evaluation environment exposed a secret or failed to bind loopback")
+	if strings.Contains(environment, credentials.SSHPassword) || !strings.Contains(environment, "BIND_ADDRESS=0.0.0.0") || !strings.Contains(environment, "PUBLIC_BASE_URL=http://192.168.1.165:8080") || strings.Contains(environment, "POSTGRES_PASSWORD=") {
+		t.Fatal("remote evaluation environment exposed a secret or failed to bind the selected private network")
+	}
+	directVerified := false
+	adapter.verifyRemoteAccess = func(_ context.Context, verified plan.DeploymentPlan, version string) error {
+		directVerified = verified.Configuration["host"] == "192.168.1.165" && version == "v1.2.3"
+		return nil
 	}
 	if err := adapter.Verify(context.Background(), candidate, credentials); err != nil {
 		t.Fatal(err)
+	}
+	if !directVerified {
+		t.Fatal("remote install did not verify the private-network endpoint")
 	}
 }
 
@@ -251,13 +266,27 @@ func TestWSLRealModeGeneratesRequiredSetupSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	environment := string(host.files[".env"])
-	for _, expected := range []string{"DEMO_MODE=false", "PUBLIC_BASE_URL=http://127.0.0.1:8080", "SESSION_SECRET=", "SECRET_ENCRYPTION_KEY="} {
+	for _, expected := range []string{"DEMO_MODE=false", "BIND_ADDRESS=0.0.0.0", "PUBLIC_BASE_URL=http://192.168.1.165:8080", "SESSION_SECRET=", "SECRET_ENCRYPTION_KEY="} {
 		if !strings.Contains(environment, expected) {
 			t.Fatalf("real mode environment is missing %s", expected)
 		}
 	}
 	if strings.Contains(environment, "change-me") || strings.Contains(environment, "runtime-only") {
 		t.Fatal("real mode environment used a placeholder or exposed runtime credentials")
+	}
+}
+
+func TestWSLEnvironmentRemainsLoopbackOnly(t *testing.T) {
+	candidate := remoteEvaluationPlan()
+	candidate.Target.Kind = "local-wsl-compose"
+	candidate.Configuration = map[string]string{"distribution": "Ubuntu-26.04", "projectName": "repo-wrangler", "demoMode": "false"}
+	environment, err := remoteEnvironment(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := string(environment)
+	if !strings.Contains(contents, "BIND_ADDRESS=127.0.0.1") || !strings.Contains(contents, "PUBLIC_BASE_URL=http://127.0.0.1:8080") || strings.Contains(contents, "BIND_ADDRESS=0.0.0.0") {
+		t.Fatalf("local WSL environment crossed the remote network boundary: %s", contents)
 	}
 }
 

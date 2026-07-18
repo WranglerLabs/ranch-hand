@@ -81,7 +81,7 @@ var configurationFields = map[string]map[string]bool{
 	},
 	"remote-linux-compose": {
 		"host": true, "port": true, "user": true, "installDirectory": true,
-		"projectName": true, "hostKeySha256": true, "demoMode": false,
+		"projectName": true, "hostKeySha256": true, "demoMode": false, "accessMode": false,
 	},
 }
 
@@ -256,6 +256,16 @@ func (p DeploymentPlan) Validate() error {
 	if p.Target.Kind == "remote-linux-compose" {
 		if err := ValidateRemoteSSHEndpoint(p.Configuration["host"], p.Configuration["port"]); err != nil {
 			return err
+		}
+		accessMode := p.Configuration["accessMode"]
+		if accessMode != "" && accessMode != "loopback" && accessMode != "private-lan" {
+			return errors.New("remote-linux-compose accessMode must be loopback or private-lan")
+		}
+		if accessMode == "private-lan" {
+			remoteIP := net.ParseIP(p.Configuration["host"])
+			if remoteIP == nil || remoteIP.To4() == nil || !remoteIP.IsPrivate() || remoteIP.IsLoopback() {
+				return errors.New("remote-linux-compose private-lan evaluation requires a private IPv4 address so Ranch Hand cannot expose plain HTTP to the public Internet")
+			}
 		}
 		if !remoteUserPattern.MatchString(p.Configuration["user"]) {
 			return errors.New("remote-linux-compose user must be a safe Linux account name")

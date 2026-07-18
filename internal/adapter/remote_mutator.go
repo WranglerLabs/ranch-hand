@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -9,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"path/filepath"
 	"regexp"
@@ -23,6 +25,7 @@ import (
 const remoteMarkerName = ".ranch-hand-installation.json"
 
 var remoteDigestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+var remoteScriptPattern = regexp.MustCompile(`(?i)<script[^>]+src=["']([^"']+\.js)["']`)
 
 var (
 	errComposeInstallDirectoryExists = errors.New("refusing to replace a pre-existing Compose installation directory")
@@ -89,7 +92,7 @@ func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.Operation
 	if staged.Target != "remote-linux-compose" {
 		return errors.New("remote Linux adapter requires a remote-linux-compose bundle")
 	}
-	environment, err := remoteEnvironment(candidate.Release.Version, candidate.Configuration["demoMode"])
+	environment, err := remoteEnvironment(candidate)
 	if err != nil {
 		return err
 	}
@@ -195,13 +198,20 @@ volumes:
 `, imageOverride, containerName, deploymentID, version, volumeName, deploymentID, version)
 }
 
-func remoteEnvironment(version, configuredDemoMode string) ([]byte, error) {
-	demoMode := configuredDemoMode
+func remoteEnvironment(candidate plan.DeploymentPlan) ([]byte, error) {
+	version := candidate.Release.Version
+	demoMode := candidate.Configuration["demoMode"]
 	if demoMode == "" {
 		// Preserve the rc.13-and-earlier meaning of existing plans.
 		demoMode = "true"
 	}
-	base := "BIND_ADDRESS=127.0.0.1\nPORT=8080\nDEMO_MODE=" + demoMode + "\nAUTH_PROVIDERS=github\nENABLE_SCHEDULER=true\nAPP_VERSION=" + version + "\n"
+	bindAddress := "127.0.0.1"
+	publicBaseURL := "http://127.0.0.1:8080"
+	if candidate.Target.Kind == "remote-linux-compose" && candidate.Configuration["accessMode"] == "private-lan" {
+		bindAddress = "0.0.0.0"
+		publicBaseURL = "http://" + candidate.Configuration["host"] + ":8080"
+	}
+	base := "BIND_ADDRESS=" + bindAddress + "\nPORT=8080\nDEMO_MODE=" + demoMode + "\nAUTH_PROVIDERS=github\nENABLE_SCHEDULER=true\nAPP_VERSION=" + version + "\nPUBLIC_BASE_URL=" + publicBaseURL + "\n"
 	if demoMode == "true" {
 		return []byte(base), nil
 	}
@@ -213,7 +223,7 @@ func remoteEnvironment(version, configuredDemoMode string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate RepoWrangler encryption key: %w", err)
 	}
-	return []byte(base + "PUBLIC_BASE_URL=http://127.0.0.1:8080\nSESSION_SECRET=" + sessionSecret + "\nSECRET_ENCRYPTION_KEY=" + encryptionKey + "\n"), nil
+	return []byte(base + "SESSION_SECRET=" + sessionSecret + "\nSECRET_ENCRYPTION_KEY=" + encryptionKey + "\n"), nil
 }
 
 func randomEnvironmentSecret() (string, error) {
@@ -269,7 +279,16 @@ func (a *RemoteLinuxCompose) Verify(ctx context.Context, candidate plan.Deployme
 	if err := verifyRemoteResources(ctx, host, marker); err != nil {
 		return err
 	}
-	return verifyRemoteHealth(ctx, host, candidate.Release.Version)
+	if err := verifyRemoteHealth(ctx, host, candidate.Release.Version); err != nil {
+		return err
+	}
+	if candidate.Target.Kind == "remote-linux-compose" && candidate.Configuration["accessMode"] == "private-lan" {
+		if a.verifyRemoteAccess == nil {
+			return errors.New("remote private-network verification is unavailable")
+		}
+		return a.verifyRemoteAccess(ctx, candidate, candidate.Release.Version)
+	}
+	return nil
 }
 
 func readRemoteMarker(ctx context.Context, host remoteHost, candidate plan.DeploymentPlan) (remoteInstallation, error) {
@@ -365,15 +384,28 @@ func verifyRemoteHealth(ctx context.Context, host remoteHost, version string) er
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
-		if remoteHealthReady(deadline, host, version) {
+		if remoteHealthReady(deadline, host, version) && remoteWebUIReady(deadline, host) {
 			return nil
 		}
 		select {
 		case <-deadline.Done():
-			return errors.New("remote RepoWrangler instance did not pass SSH-forwarded readiness and release-identity checks within five minutes")
+			return errors.New("RepoWrangler did not pass readiness, release-identity, and web-interface asset checks within five minutes")
 		case <-ticker.C:
 		}
 	}
+}
+
+func remoteWebUIReady(ctx context.Context, host remoteHost) bool {
+	status, body, err := host.Health(ctx, "/")
+	if err != nil || status != http.StatusOK || !bytes.Contains(body, []byte(`id="root"`)) {
+		return false
+	}
+	match := remoteScriptPattern.FindSubmatch(body)
+	if len(match) != 2 || len(match[1]) > 512 || !strings.HasPrefix(string(match[1]), "/assets/") {
+		return false
+	}
+	assetStatus, asset, assetErr := host.Health(ctx, string(match[1]))
+	return assetErr == nil && assetStatus == http.StatusOK && len(asset) >= 1024
 }
 
 func remoteHealthReady(ctx context.Context, host remoteHost, version string) bool {
@@ -383,6 +415,59 @@ func remoteHealthReady(ctx context.Context, host remoteHost, version string) boo
 	}{{"/health/ready", false}, {"/health/live", true}} {
 		status, body, err := host.Health(ctx, check.path)
 		if err != nil || status != http.StatusOK {
+			return false
+		}
+		var result struct {
+			OK      bool   `json:"ok"`
+			Version string `json:"version"`
+		}
+		if json.Unmarshal(body, &result) != nil || !result.OK || (check.version && result.Version != version) {
+			return false
+		}
+	}
+	return true
+}
+
+func verifyRemoteLANHealth(ctx context.Context, candidate plan.DeploymentPlan, version string) error {
+	deadline, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			Proxy:       nil,
+			DialContext: (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+		},
+	}
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		if directRemoteHealthReady(deadline, client, candidate.Configuration["host"], version) {
+			return nil
+		}
+		select {
+		case <-deadline.Done():
+			return fmt.Errorf("RepoWrangler passed target-side checks but http://%s:8080 was not reachable from this computer within five minutes; check the Linux host firewall and private-network routing", candidate.Configuration["host"])
+		case <-ticker.C:
+		}
+	}
+}
+
+func directRemoteHealthReady(ctx context.Context, client *http.Client, host, version string) bool {
+	for _, check := range []struct {
+		path    string
+		version bool
+	}{{"/health/ready", false}, {"/health/live", true}} {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+net.JoinHostPort(host, "8080")+check.path, nil)
+		if err != nil {
+			return false
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			return false
+		}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		_ = response.Body.Close()
+		if readErr != nil || response.StatusCode != http.StatusOK {
 			return false
 		}
 		var result struct {

@@ -20,9 +20,9 @@ Ranch Hand connects with its embedded Go SSH client and performs these steps:
 3. Create the directory with owner-only permissions.
 4. Transfer the verified digest-pinned `compose.yaml`, a generated evaluation override, a secret-free `.env`, and a target-side ownership marker.
 5. Use Docker Compose v2 on the target to activate only the server service.
-6. Re-read the marker, rehash every transferred file, inspect the exact container and volume labels, verify the immutable image and running state, and check readiness and version through an SSH-forwarded connection to remote loopback.
+6. Re-read the marker, rehash every transferred file, inspect the exact container and volume labels, verify the immutable image and running state, check readiness and version through the authenticated target connection, and independently verify the private-network endpoint from the Windows control workstation.
 
-The generated configuration binds `127.0.0.1:8080`, enables demo mode and SQLite, creates no proxy, and exposes no public ingress. The container and data volume carry exact managed, deployment, and release labels.
+The generated Remote Linux configuration accepts only an explicit private IPv4 target and publishes `0.0.0.0:8080`, enabling direct access at `http://<private-ip>:8080`. It enables demo mode and SQLite, creates no proxy, and refuses a public-IP HTTP deployment. Local WSL continues to bind `127.0.0.1:8080`. The container and data volume carry exact managed, deployment, and release labels.
 
 ## Recovery rule
 

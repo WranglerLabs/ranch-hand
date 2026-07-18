@@ -14,6 +14,7 @@ type Credentials struct {
 	SSHPrivateKey           string `json:"sshPrivateKey,omitempty"`
 	SSHPrivateKeyPassphrase string `json:"sshPrivateKeyPassphrase,omitempty"`
 	SSHPassword             string `json:"sshPassword,omitempty"`
+	SudoPassword            string `json:"sudoPassword,omitempty"`
 }
 
 func (c *Credentials) Clear() {
@@ -22,6 +23,7 @@ func (c *Credentials) Clear() {
 	c.SSHPrivateKey = ""
 	c.SSHPrivateKeyPassphrase = ""
 	c.SSHPassword = ""
+	c.SudoPassword = ""
 }
 
 func (c Credentials) Validate() error {
@@ -31,7 +33,7 @@ func (c Credentials) Validate() error {
 	if len(c.SSHPrivateKey) > 1<<20 {
 		return errors.New("SSH private key exceeds the 1 MiB safety limit")
 	}
-	if len(c.SSHPrivateKeyPassphrase) > 8<<10 || len(c.SSHPassword) > 8<<10 {
+	if len(c.SSHPrivateKeyPassphrase) > 8<<10 || len(c.SSHPassword) > 8<<10 || len(c.SudoPassword) > 8<<10 {
 		return errors.New("SSH passphrase or password exceeds the 8 KiB safety limit")
 	}
 	return nil
@@ -59,9 +61,14 @@ type RemnantCleaner interface {
 	CleanupRemnant(context.Context, plan.DeploymentPlan, Credentials) error
 }
 
+type PrerequisiteInstaller interface {
+	InstallPrerequisites(context.Context, plan.DeploymentPlan, Credentials) error
+}
+
 type Registry struct {
-	adapters map[string]Preflighter
-	cleaners map[string]RemnantCleaner
+	adapters   map[string]Preflighter
+	cleaners   map[string]RemnantCleaner
+	installers map[string]PrerequisiteInstaller
 }
 
 func NewRegistry() *Registry {
@@ -72,7 +79,19 @@ func NewRegistry() *Registry {
 		"local-compose":        NewLocalDocker(),
 		"local-wsl-compose":    wsl,
 		"remote-linux-compose": NewRemoteLinuxCompose(),
-	}, cleaners: map[string]RemnantCleaner{"local-wsl-compose": wsl}}
+	}, cleaners: map[string]RemnantCleaner{"local-wsl-compose": wsl}, installers: map[string]PrerequisiteInstaller{
+		"local-compose":        NewLocalDocker(),
+		"local-wsl-compose":    wsl,
+		"remote-linux-compose": NewRemoteLinuxCompose(),
+	}}
+}
+
+func (r *Registry) InstallPrerequisites(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) error {
+	installer, ok := r.installers[candidate.Target.Kind]
+	if !ok {
+		return fmt.Errorf("guided prerequisite installation is not available for target %q", candidate.Target.Kind)
+	}
+	return installer.InstallPrerequisites(ctx, candidate, credentials)
 }
 
 func (r *Registry) CleanupRemnant(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) error {

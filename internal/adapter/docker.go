@@ -38,6 +38,7 @@ func (d *LocalDocker) Preflight(ctx context.Context, candidate plan.DeploymentPl
 	}
 	response, err := d.client.Do(request)
 	if err != nil {
+		report.State = "prerequisites-installable"
 		appendCheck(&report, "docker-engine", false, "Ranch Hand could not reach the local Docker Engine API: "+err.Error())
 		return report
 	}
@@ -73,4 +74,11 @@ func (d *LocalDocker) Preflight(ctx context.Context, candidate plan.DeploymentPl
 	appendCheck(&report, "compose-loopback", true, "The verified Compose bundle binds to loopback by default and contains no bundled proxy.")
 	report.Ready = true
 	return report
+}
+
+func (d *LocalDocker) InstallPrerequisites(ctx context.Context, candidate plan.DeploymentPlan, _ Credentials) error {
+	if err := candidate.Validate(); err != nil {
+		return err
+	}
+	return installDockerDesktop(ctx)
 }

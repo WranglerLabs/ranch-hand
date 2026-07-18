@@ -4,6 +4,7 @@ package adapter
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 )
@@ -16,4 +17,8 @@ func localDockerTransport() http.RoundTripper {
 		},
 		DisableCompression: true,
 	}
+}
+
+func installDockerDesktop(context.Context) error {
+	return errors.New("guided Docker Desktop installation is available only in the Windows build")
 }

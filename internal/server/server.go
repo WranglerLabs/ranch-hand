@@ -48,6 +48,10 @@ type targetRemnantCleaner interface {
 	CleanupRemnant(context.Context, plan.DeploymentPlan, adapter.Credentials) error
 }
 
+type targetPrerequisiteInstaller interface {
+	InstallPrerequisites(context.Context, plan.DeploymentPlan, adapter.Credentials) error
+}
+
 type bundleStager interface {
 	Stage(productrelease.VerifiedArtifact) (bundle.StagedBundle, error)
 }
@@ -80,6 +84,7 @@ type Server struct {
 	verified          map[string]productrelease.VerifiedArtifact
 	targets           targetPreflighter
 	remnantCleaner    targetRemnantCleaner
+	prerequisites     targetPrerequisiteInstaller
 	stager            bundleStager
 	coordinator       operationRunner
 	installations     installationReader
@@ -123,7 +128,8 @@ func NewWithDependencies(token, version string, ui fs.FS, verifier releaseVerifi
 func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, targets targetPreflighter, stager bundleStager, coordinator operationRunner, installations installationReader, rollbackPool rollbackPoolManager) http.Handler {
 	discoverer, _ := verifier.(releaseDiscoverer)
 	cleaner, _ := targets.(targetRemnantCleaner)
-	s := &Server{token: token, version: version, ui: ui, releaseVerifier: verifier, releaseDiscoverer: discoverer, verified: make(map[string]productrelease.VerifiedArtifact), targets: targets, remnantCleaner: cleaner, stager: stager, coordinator: coordinator, installations: installations, rollbackPool: rollbackPool, readyPlans: make(map[string]bool)}
+	prerequisites, _ := targets.(targetPrerequisiteInstaller)
+	s := &Server{token: token, version: version, ui: ui, releaseVerifier: verifier, releaseDiscoverer: discoverer, verified: make(map[string]productrelease.VerifiedArtifact), targets: targets, remnantCleaner: cleaner, prerequisites: prerequisites, stager: stager, coordinator: coordinator, installations: installations, rollbackPool: rollbackPool, readyPlans: make(map[string]bool)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", s.live)
 	mux.Handle("GET /api/v1/status", s.authorize(http.HandlerFunc(s.status)))
@@ -134,6 +140,7 @@ func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, 
 	mux.Handle("POST /api/v1/plans/dry-run", s.authorize(http.HandlerFunc(s.dryRunPlan)))
 	mux.Handle("POST /api/v1/targets/preflight", s.authorize(http.HandlerFunc(s.preflightTarget)))
 	mux.Handle("POST /api/v1/targets/remnants/cleanup", s.authorize(http.HandlerFunc(s.cleanupTargetRemnant)))
+	mux.Handle("POST /api/v1/targets/prerequisites/install", s.authorize(http.HandlerFunc(s.installTargetPrerequisites)))
 	mux.Handle("GET /api/v1/targets/wsl-distributions", s.authorize(http.HandlerFunc(s.wslDistributions)))
 	mux.Handle("POST /api/v1/targets/remote-linux/host-key", s.authorize(http.HandlerFunc(s.inspectRemoteLinuxHostKey)))
 	mux.Handle("POST /api/v1/bundles/stage", s.authorize(http.HandlerFunc(s.stageBundle)))
@@ -149,6 +156,56 @@ func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, 
 	mux.Handle("GET /api/v1/releases/recommended", s.authorize(http.HandlerFunc(s.recommendedRelease)))
 	mux.Handle("/", s.spa())
 	return s.securityHeaders(mux)
+}
+
+func (s *Server) installTargetPrerequisites(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request rejected"})
+		return
+	}
+	if s.prerequisites == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "guided prerequisite installation is unavailable"})
+		return
+	}
+	var request struct {
+		Plan        plan.DeploymentPlan `json:"plan"`
+		Credentials adapter.Credentials `json:"credentials"`
+		Confirmed   bool                `json:"confirmed"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxTargetRequestSize))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF || !request.Confirmed {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Docker prerequisite installation requires an explicit confirmed request"})
+		return
+	}
+	defer request.Credentials.Clear()
+	if err := request.Credentials.Validate(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := request.Plan.Validate(); err != nil || (request.Plan.Target.Kind != "local-compose" && request.Plan.Target.Kind != "local-wsl-compose" && request.Plan.Target.Kind != "remote-linux-compose") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "a valid Docker Desktop, WSL, or Remote Linux Compose plan is required"})
+		return
+	}
+	verified, found := s.verifiedPlan(request.Plan)
+	if !found || !plan.Preflight(request.Plan, verified.CachePath).Ready {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "the plan does not match a currently verified release artifact"})
+		return
+	}
+	if err := s.prerequisites.InstallPrerequisites(r.Context(), request.Plan, request.Credentials); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	report := s.targets.Preflight(r.Context(), request.Plan, request.Credentials)
+	report = s.annotateLifecycleTarget(request.Plan, report)
+	if report.Ready {
+		if key, err := planSessionKey(request.Plan); err == nil {
+			s.readyMu.Lock()
+			s.readyPlans[key] = true
+			s.readyMu.Unlock()
+		}
+	}
+	writeJSON(w, http.StatusOK, report)
 }
 
 func (s *Server) inspectRemoteLinuxHostKey(w http.ResponseWriter, r *http.Request) {

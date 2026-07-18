@@ -6,6 +6,38 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.17] - 2026-07-18
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Added
+
+- Missing Docker prerequisites now produce an explicit, confirmed in-product
+  recovery action instead of a dead-end preflight error.
+- Ubuntu/Debian WSL targets can install Docker Engine and Compose v2 through the
+  WSL root boundary, start Docker, grant the selected user access, and rerun
+  preflight automatically.
+- Ubuntu/Debian Remote Linux targets can perform the same bounded installation
+  through the verified SSH connection using root, passwordless sudo, the SSH
+  login password, or an explicitly supplied sudo password.
+- Docker Desktop targets can install Docker Desktop through Windows Package
+  Manager. Ranch Hand then explains any remaining first-run/startup action and
+  reruns its native Engine check.
+
+### Security
+
+- Preflight remains read-only. Package installation requires an explicit
+  confirmation and a release-bound plan.
+- Linux package mutation is rejected unless `/etc/os-release` identifies an
+  Ubuntu/Debian family system. Runtime passwords remain in memory and are
+  cleared from the API request after use.
+
+### Verification
+
+- Full Go test suite passes on all packages.
+- React TypeScript checking and production build pass.
+
 ## [0.1.0-rc.16] - 2026-07-18
 
 **Classification: Public Preview.** Publicly downloadable and intended for

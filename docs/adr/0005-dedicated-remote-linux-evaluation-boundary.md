@@ -5,7 +5,7 @@
 
 ## Context
 
-Ranch Hand must install RepoWrangler on a Linux server without requiring Git, OpenSSH, WSL, Docker, Compose, Node.js, Go, or a shell on the Windows control workstation. Docker Compose is a client-side orchestrator, so the target host must already provide a Linux Docker Engine and Docker Compose v2.
+Ranch Hand must install RepoWrangler on a Linux server without requiring Git, OpenSSH, WSL, Docker, Compose, Node.js, Go, or a shell on the Windows control workstation. Preflight remains read-only. When Docker Engine or Compose v2 is absent, an explicit prerequisite action may install the distribution packages only on recognized Ubuntu/Debian targets using root, passwordless sudo, or an in-memory sudo password. Unsupported distributions are not mutated.
 
 A remote operation crosses a privileged SSH boundary. Ranch Hand must pin host identity, prevent command injection from portable plan fields, avoid replacing an existing project, and prove ownership before failed-install cleanup.
 

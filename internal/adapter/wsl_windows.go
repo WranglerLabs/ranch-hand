@@ -102,6 +102,24 @@ func (h *wslHost) Health(ctx context.Context, requestPath string) (int, []byte, 
 
 func (h *wslHost) Close() error { return nil }
 
+func installWSLDockerPrerequisites(ctx context.Context, distribution, user string) error {
+	if distribution == "" || strings.ContainsAny(distribution, "\r\n\x00") || !remoteUserPatternForPrerequisites(user) {
+		return errors.New("a valid WSL distribution and user are required for Docker installation")
+	}
+	process := exec.CommandContext(ctx, "wsl.exe", "-d", distribution, "-u", "root", "--", "sh", "-s")
+	process.Stdin = strings.NewReader(dockerPrerequisiteScript(user))
+	output := &limitedOutput{maximum: 64 << 10}
+	process.Stdout = output
+	process.Stderr = output
+	if err := process.Run(); err != nil {
+		if output.truncated {
+			return errors.New("Docker prerequisite installer output exceeded 64 KiB")
+		}
+		return fmt.Errorf("install Docker prerequisites inside WSL: %s", strings.TrimSpace(output.String()))
+	}
+	return nil
+}
+
 func loadWSLImageArchive(ctx context.Context, distribution, archive, runtimeImage, expectedImageID string) error {
 	file, err := os.Open(archive)
 	if err != nil {

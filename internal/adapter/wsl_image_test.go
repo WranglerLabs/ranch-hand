@@ -12,13 +12,15 @@ import (
 )
 
 func TestCompanionImageTrustRecordsSupportCurrentAndPriorRelease(t *testing.T) {
-	current, err := companionForImage(repoWranglerV1012Companion.image)
-	if err != nil || current.runtimeImage != "repo-wrangler-ranch-hand:v1.0.12" || len(current.imageIDs) != 3 {
+	current, err := companionForImage(repoWranglerV1013Companion.image)
+	if err != nil || current.runtimeImage != "repo-wrangler-ranch-hand:v1.0.13" || len(current.imageIDs) != 3 {
 		t.Fatalf("current RepoWrangler companion trust record is invalid: %#v %v", current, err)
 	}
-	prior, err := companionForImage(repoWranglerV1010Companion.image)
-	if err != nil || prior.runtimeImage != repoWranglerV1010Companion.runtimeImage {
-		t.Fatalf("prior RepoWrangler companion trust record was not retained: %#v %v", prior, err)
+	for _, prior := range []companionImage{repoWranglerV1012Companion, repoWranglerV1010Companion} {
+		resolved, err := companionForImage(prior.image)
+		if err != nil || resolved.runtimeImage != prior.runtimeImage {
+			t.Fatalf("prior RepoWrangler companion trust record was not retained: %#v %v", resolved, err)
+		}
 	}
 	if _, err := companionForImage("ghcr.io/wranglerlabs/repo-wrangler-server@sha256:" + strings.Repeat("f", 64)); err == nil {
 		t.Fatal("unknown RepoWrangler image unexpectedly received a companion trust record")
@@ -26,7 +28,7 @@ func TestCompanionImageTrustRecordsSupportCurrentAndPriorRelease(t *testing.T) {
 }
 
 func TestCompanionLoadedImageAcceptsOnlyVerifiedEngineIdentities(t *testing.T) {
-	for _, companion := range []companionImage{repoWranglerV1010Companion, repoWranglerV1012Companion} {
+	for _, companion := range []companionImage{repoWranglerV1010Companion, repoWranglerV1012Companion, repoWranglerV1013Companion} {
 		for _, identity := range companion.imageIDs {
 			if !companionLoadedImageMatches(companion, identity+"\n") {
 				t.Fatalf("verified image identity was rejected: %s", identity)

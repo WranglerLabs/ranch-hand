@@ -6,6 +6,22 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.4] - 2026-07-17
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- Changed the WSL default Compose project to `repo-wrangler-ranch-hand` so a
+  normal existing `repo-wrangler` Compose deployment does not block a new Ranch
+  Hand evaluation installation.
+- Replaced leaked remote-Linux collision wording with local WSL-specific,
+  non-destructive guidance that names the conflicting project.
+- Prefilled remote Linux SSH port `22` and Compose project name, and derived the
+  default installation directory from the entered SSH username while preserving
+  an operator-customized path.
+
 ## [0.1.0-rc.3] - 2026-07-17
 
 **Classification: Public Preview.** Publicly downloadable and intended for

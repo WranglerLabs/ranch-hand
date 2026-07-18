@@ -67,13 +67,26 @@ func (a *WSLCompose) Preflight(ctx context.Context, candidate plan.DeploymentPla
 		return report
 	}
 	if err := remoteBoundaryAvailable(ctx, host, normalized); err != nil {
-		appendCheck(&report, "wsl-compose-boundary", false, err.Error())
+		appendCheck(&report, "wsl-compose-boundary", false, wslBoundaryMessage(candidate.Configuration["projectName"], err))
 		return report
 	}
 	appendCheck(&report, "wsl-compose-boundary", true, "The Compose project and Ranch Hand installation directory are unused.")
 	appendCheck(&report, "wsl-loopback", true, "RepoWrangler will use Docker-managed storage and Windows loopback http://127.0.0.1:8080; no WSL path or IP address is required.")
 	report.Ready = true
 	return report
+}
+
+func wslBoundaryMessage(project string, err error) string {
+	switch {
+	case errors.Is(err, errComposeInstallDirectoryExists):
+		return "The local WSL installation directory already exists. Ranch Hand will not replace it. Choose a different Compose project name or manage the existing deployment separately."
+	case errors.Is(err, errComposeContainersExist):
+		return "The local WSL Compose project \"" + project + "\" already has containers. Ranch Hand will not replace them. Choose a different Compose project name or manage the existing deployment separately."
+	case errors.Is(err, errComposeVolumesExist):
+		return "The local WSL Compose project \"" + project + "\" already has volumes. Ranch Hand will not replace them. Choose a different Compose project name or manage the existing deployment separately."
+	default:
+		return err.Error()
+	}
 }
 
 func normalizeWSLPlan(ctx context.Context, candidate plan.DeploymentPlan, host remoteHost) (plan.DeploymentPlan, error) {

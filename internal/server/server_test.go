@@ -84,7 +84,12 @@ func (f *fakeInstallationReader) Backups(string) ([]lifecycle.BackupRecord, erro
 	return f.backups, f.err
 }
 
-func (f *fakeInstallationReader) Active(string) (lifecycle.Journal, error) {
+func (f *fakeInstallationReader) Active(deploymentID string) (lifecycle.Journal, error) {
+	for _, journal := range f.active {
+		if journal.DeploymentID == deploymentID {
+			return journal, f.err
+		}
+	}
 	return lifecycle.Journal{}, os.ErrNotExist
 }
 
@@ -321,6 +326,33 @@ func TestListsAndExplicitlyPrunesLocalRollbackPool(t *testing.T) {
 	response = authorizedPost(h, "/api/v1/installations/"+deploymentID+"/rollback-pool/prune", `{"keepLatest":0,"confirmed":false}`)
 	if response.Code != http.StatusBadRequest || pool.keepLatest != 1 {
 		t.Fatalf("unconfirmed rollback prune was accepted: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestTargetPreflightRecognizesInterruptedAndExistingLifecycleState(t *testing.T) {
+	candidate := plan.DeploymentPlan{
+		SchemaVersion: plan.CurrentSchemaVersion, Name: "Local WSL Wrangler",
+		Release: plan.ReleaseSelection{Version: "v1.2.3", ManifestURL: "https://github.com/WranglerLabs/repo-wrangler/releases/download/v1.2.3/release-manifest.json", ManifestSHA256: strings.Repeat("a", 64), ArtifactSHA256: strings.Repeat("b", 64), ArtifactSize: 42},
+		Target:  plan.Target{Kind: "local-wsl-compose"}, Configuration: map[string]string{"distribution": "Ubuntu", "projectName": "repo-wrangler-ranch-hand"},
+	}
+	deploymentID, err := lifecycle.DeploymentID(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked := adapter.Report{Target: candidate.Target.Kind, Checks: []adapter.Check{{Name: "wsl-compose-boundary", Message: "directory exists"}}}
+
+	interrupted := &fakeInstallationReader{active: []lifecycle.Journal{{DeploymentID: deploymentID, Kind: lifecycle.Install, Phase: lifecycle.Staged}}}
+	server := &Server{installations: interrupted}
+	report := server.annotateLifecycleTarget(candidate, blocked)
+	if report.State != "recovery-required" || report.DeploymentID != deploymentID || report.Ready || !strings.Contains(report.Checks[0].Message, "ownership-checked recovery") {
+		t.Fatalf("interrupted operation was not surfaced safely: %#v", report)
+	}
+
+	existing := &fakeInstallationReader{records: []lifecycle.InstallationRecord{{DeploymentID: deploymentID, State: lifecycle.InstallationActive, Version: "v1.2.3"}}}
+	server.installations = existing
+	report = server.annotateLifecycleTarget(candidate, blocked)
+	if report.State != "already-installed" || report.DeploymentID != deploymentID || report.Ready || !strings.Contains(report.Checks[0].Message, "active installation record") {
+		t.Fatalf("existing installation was not surfaced safely: %#v", report)
 	}
 }
 

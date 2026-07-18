@@ -6,6 +6,22 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.6] - 2026-07-17
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- Made target preflight recognize Ranch Hand's own interrupted lifecycle
+  journal instead of reporting its owned WSL installation directory as an
+  unrelated collision.
+- Added the ownership-checked recovery action directly to the blocked WSL
+  preflight result, followed by a clean preflight retry.
+- Distinguished an already committed Ranch Hand installation from both an
+  interrupted install and an unknown directory. Unknown directories remain
+  protected and are never adopted or removed automatically.
+
 ## [0.1.0-rc.5] - 2026-07-17
 
 **Classification: Public Preview.** Publicly downloadable and intended for

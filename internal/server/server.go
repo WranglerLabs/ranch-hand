@@ -490,6 +490,7 @@ func (s *Server) preflightTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	report := s.targets.Preflight(r.Context(), request.Plan, request.Credentials)
+	report = s.annotateLifecycleTarget(request.Plan, report)
 	if report.Ready {
 		if key, err := planSessionKey(request.Plan); err == nil {
 			s.readyMu.Lock()
@@ -498,6 +499,50 @@ func (s *Server) preflightTarget(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) annotateLifecycleTarget(candidate plan.DeploymentPlan, report adapter.Report) adapter.Report {
+	if s.installations == nil {
+		return report
+	}
+	deploymentID, err := lifecycle.DeploymentID(candidate)
+	if err != nil {
+		return report
+	}
+	report.DeploymentID = deploymentID
+	if journal, err := s.installations.Active(deploymentID); err == nil {
+		report.Ready = false
+		report.State = "recovery-required"
+		return replaceBoundaryCheck(report, "Ranch Hand owns this directory and found an interrupted "+string(journal.Kind)+" operation at phase "+string(journal.Phase)+". Run the ownership-checked recovery below, then preflight again.")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		report.Ready = false
+		report.State = "lifecycle-unavailable"
+		return replaceBoundaryCheck(report, "Ranch Hand could not safely read the lifecycle record for this target. No target changes were made.")
+	}
+	record, err := s.installations.Installation(deploymentID)
+	if err == nil && record.State == lifecycle.InstallationActive {
+		report.Ready = false
+		report.State = "already-installed"
+		return replaceBoundaryCheck(report, "Ranch Hand already has an active installation record for this target at "+record.Version+". It will not start a duplicate installation.")
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		report.Ready = false
+		report.State = "lifecycle-unavailable"
+		return replaceBoundaryCheck(report, "Ranch Hand could not safely read the installation record for this target. No target changes were made.")
+	}
+	return report
+}
+
+func replaceBoundaryCheck(report adapter.Report, message string) adapter.Report {
+	for index := range report.Checks {
+		if strings.Contains(report.Checks[index].Name, "boundary") {
+			report.Checks[index].OK = false
+			report.Checks[index].Message = message
+			return report
+		}
+	}
+	report.Checks = append(report.Checks, adapter.Check{Name: "lifecycle-boundary", OK: false, Message: message})
+	return report
 }
 
 func planSessionKey(candidate plan.DeploymentPlan) (string, error) {

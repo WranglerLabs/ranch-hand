@@ -44,9 +44,11 @@ type Check struct {
 }
 
 type Report struct {
-	Ready  bool    `json:"ready"`
-	Target string  `json:"target"`
-	Checks []Check `json:"checks"`
+	Ready        bool    `json:"ready"`
+	Target       string  `json:"target"`
+	State        string  `json:"state,omitempty"`
+	DeploymentID string  `json:"deploymentId,omitempty"`
+	Checks       []Check `json:"checks"`
 }
 
 type Preflighter interface {

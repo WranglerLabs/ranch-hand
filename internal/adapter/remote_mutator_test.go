@@ -53,6 +53,8 @@ func newFakeRemoteHost() *fakeRemoteHost { return &fakeRemoteHost{files: make(ma
 func (h *fakeRemoteHost) Run(_ context.Context, command string, stdin []byte) (string, error) {
 	h.commands = append(h.commands, command)
 	switch {
+	case command == "printenv HOME":
+		return "/home/wsl", nil
 	case command == "command -v docker":
 		return "/usr/bin/docker", nil
 	case strings.HasPrefix(command, "docker version --format"):
@@ -229,6 +231,25 @@ func TestRemoteEvaluationInstallTransfersVerifiedBundleAndChecksIdentity(t *test
 	}
 	if err := adapter.Verify(context.Background(), candidate, credentials); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWSLRealModeGeneratesRequiredSetupSecrets(t *testing.T) {
+	host := newFakeRemoteHost()
+	adapter := newRemoteLinuxCompose(func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error) { return host, nil })
+	candidate := remoteEvaluationPlan()
+	candidate.Configuration["demoMode"] = "false"
+	if err := adapter.Apply(context.Background(), lifecycle.Install, candidate, "", stagedRemoteBundle(t), lifecycle.OperationBackups{}, Credentials{SSHPassword: "runtime-only"}); err != nil {
+		t.Fatal(err)
+	}
+	environment := string(host.files[".env"])
+	for _, expected := range []string{"DEMO_MODE=false", "PUBLIC_BASE_URL=http://127.0.0.1:8080", "SESSION_SECRET=", "SECRET_ENCRYPTION_KEY="} {
+		if !strings.Contains(environment, expected) {
+			t.Fatalf("real mode environment is missing %s", expected)
+		}
+	}
+	if strings.Contains(environment, "change-me") || strings.Contains(environment, "runtime-only") {
+		t.Fatal("real mode environment used a placeholder or exposed runtime credentials")
 	}
 }
 

@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -68,6 +69,10 @@ func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.Operation
 	if staged.Target != "remote-linux-compose" {
 		return errors.New("remote Linux adapter requires a remote-linux-compose bundle")
 	}
+	environment, err := remoteEnvironment(candidate.Release.Version, candidate.Configuration["demoMode"])
+	if err != nil {
+		return err
+	}
 	host, err := a.connect(ctx, candidate, credentials)
 	if err != nil {
 		return err
@@ -109,7 +114,6 @@ func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.Operation
 	containerName := project + "-server"
 	volumeName := project + "-data"
 	override := []byte(remoteOverride(project, containerName, volumeName, deploymentID, candidate.Release.Version, runtimeImage))
-	environment := []byte(remoteEnvironment(candidate.Release.Version))
 	marker := remoteInstallation{
 		SchemaVersion: "1.0", DeploymentID: deploymentID, Version: candidate.Release.Version,
 		ArtifactSHA256: candidate.Release.ArtifactSHA256, ProjectName: project, ContainerName: containerName,
@@ -181,8 +185,33 @@ volumes:
 `, imageOverride, containerName, deploymentID, version, volumeName, deploymentID, version)
 }
 
-func remoteEnvironment(version string) string {
-	return "BIND_ADDRESS=127.0.0.1\nPORT=8080\nDEMO_MODE=true\nAUTH_PROVIDERS=github\nENABLE_SCHEDULER=true\nAPP_VERSION=" + version + "\n"
+func remoteEnvironment(version, configuredDemoMode string) ([]byte, error) {
+	demoMode := configuredDemoMode
+	if demoMode == "" {
+		// Preserve the rc.13-and-earlier meaning of existing plans.
+		demoMode = "true"
+	}
+	base := "BIND_ADDRESS=127.0.0.1\nPORT=8080\nDEMO_MODE=" + demoMode + "\nAUTH_PROVIDERS=github\nENABLE_SCHEDULER=true\nAPP_VERSION=" + version + "\n"
+	if demoMode == "true" {
+		return []byte(base), nil
+	}
+	sessionSecret, err := randomEnvironmentSecret()
+	if err != nil {
+		return nil, fmt.Errorf("generate RepoWrangler session secret: %w", err)
+	}
+	encryptionKey, err := randomEnvironmentSecret()
+	if err != nil {
+		return nil, fmt.Errorf("generate RepoWrangler encryption key: %w", err)
+	}
+	return []byte(base + "PUBLIC_BASE_URL=http://127.0.0.1:8080\nSESSION_SECRET=" + sessionSecret + "\nSECRET_ENCRYPTION_KEY=" + encryptionKey + "\n"), nil
+}
+
+func randomEnvironmentSecret() (string, error) {
+	value := make([]byte, 32)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(value), nil
 }
 
 func bytesSHA256(contents []byte) string {

@@ -1,6 +1,6 @@
 # Unsigned release-candidate policy
 
-Ranch Hand `v0.1.0-rc.1` was the first **Public Preview**; `v0.1.0-rc.13` is the
+Ranch Hand `v0.1.0-rc.1` was the first **Public Preview**; `v0.1.0-rc.14` is the
 current Preview. These are evaluation artifacts, not generally available or
 production-supported releases.
 

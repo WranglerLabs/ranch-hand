@@ -23,6 +23,12 @@ const remoteMarkerName = ".ranch-hand-installation.json"
 
 var remoteDigestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
+var (
+	errComposeInstallDirectoryExists = errors.New("refusing to replace a pre-existing Compose installation directory")
+	errComposeContainersExist        = errors.New("refusing to replace a Compose project with existing containers")
+	errComposeVolumesExist           = errors.New("refusing to replace a Compose project with existing volumes")
+)
+
 type remoteInstallation struct {
 	SchemaVersion     string `json:"schemaVersion"`
 	DeploymentID      string `json:"deploymentId"`
@@ -108,16 +114,16 @@ func (a *RemoteLinuxCompose) Apply(ctx context.Context, kind lifecycle.Operation
 func remoteBoundaryAvailable(ctx context.Context, host remoteHost, candidate plan.DeploymentPlan) error {
 	directory := candidate.Configuration["installDirectory"]
 	if _, err := host.Run(ctx, "test ! -e "+shellQuote(directory), nil); err != nil {
-		return errors.New("refusing to replace a pre-existing remote installation directory")
+		return errComposeInstallDirectoryExists
 	}
 	project := shellQuote(candidate.Configuration["projectName"])
 	containers, err := host.Run(ctx, "docker ps --all --quiet --filter label=com.docker.compose.project="+project, nil)
 	if err != nil || containers != "" {
-		return errors.New("refusing to replace a remote Compose project with existing containers")
+		return errComposeContainersExist
 	}
 	volumes, err := host.Run(ctx, "docker volume ls --quiet --filter label=com.docker.compose.project="+project, nil)
 	if err != nil || volumes != "" {
-		return errors.New("refusing to replace a remote Compose project with existing volumes")
+		return errComposeVolumesExist
 	}
 	return nil
 }

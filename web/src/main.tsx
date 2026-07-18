@@ -63,14 +63,14 @@ const targetFields: Record<string, { key: string; label: string; placeholder: st
   ],
   "local-wsl-compose": [
     { key: "distribution", label: "WSL distribution", placeholder: "Detected automatically" },
-    { key: "projectName", label: "Compose project", placeholder: "repo-wrangler" },
+    { key: "projectName", label: "Compose project", placeholder: "repo-wrangler-ranch-hand" },
   ],
   "remote-linux-compose": [
     { key: "host", label: "Linux host", placeholder: "server.example.com" },
     { key: "port", label: "SSH port", placeholder: "22" },
-    { key: "user", label: "SSH user", placeholder: "repo-wrangler" },
-    { key: "installDirectory", label: "Install directory", placeholder: "/opt/repo-wrangler" },
-    { key: "projectName", label: "Compose project", placeholder: "repo-wrangler" },
+    { key: "user", label: "SSH user", placeholder: "ubuntu" },
+    { key: "installDirectory", label: "Install directory", placeholder: "Filled from the SSH user" },
+    { key: "projectName", label: "Compose project", placeholder: "repo-wrangler-ranch-hand" },
     { key: "hostKeySha256", label: "Pinned SSH host key", placeholder: "SHA256:..." },
   ],
 };
@@ -89,8 +89,14 @@ const credentialFields: Record<string, { key: string; label: string; placeholder
 
 const targetDefaults: Record<string, Record<string, string>> = {
   "local-compose": { projectName: "repo-wrangler", dataVolume: "repo-wrangler-data", listenAddress: "127.0.0.1:8080" },
-  "local-wsl-compose": { projectName: "repo-wrangler" },
+  "local-wsl-compose": { projectName: "repo-wrangler-ranch-hand" },
+  "remote-linux-compose": { port: "22", projectName: "repo-wrangler-ranch-hand" },
 };
+
+function remoteInstallDirectory(user: string): string {
+  if (!user) return "";
+  return user === "root" ? "/root/.repo-wrangler-ranch-hand" : `/home/${user}/.repo-wrangler-ranch-hand`;
+}
 
 const token = window.location.hash.startsWith("#token=")
   ? decodeURIComponent(window.location.hash.slice(7))
@@ -625,7 +631,17 @@ function App() {
         <p>Only non-secret identifiers and locations belong here. Ranch Hand binds the exported plan to the exact verified manifest and artifact digests; credentials are requested only when an operation needs them.</p>
         <form className="plan-form" onSubmit={createPlan}>
           <label>Deployment name<input required maxLength={120} value={deploymentName} onChange={(event) => setDeploymentName(event.target.value)} /></label>
-          {targetFields[target].map((field) => <label key={field.key}>{field.label}{field.optional ? " (optional)" : ""}{field.key === "distribution" ? <select required value={configuration.distribution || ""} onChange={(event) => setConfiguration({ ...configuration, distribution: event.target.value })}><option value="">Select an installed WSL distribution</option>{wslDistributions.map((distribution) => <option key={distribution} value={distribution}>{distribution}</option>)}</select> : <input required={!field.optional} placeholder={field.placeholder} value={configuration[field.key] || ""} onChange={(event) => setConfiguration({ ...configuration, [field.key]: event.target.value })} />}</label>)}
+          {targetFields[target].map((field) => <label key={field.key}>{field.label}{field.optional ? " (optional)" : ""}{field.key === "distribution" ? <select required value={configuration.distribution || ""} onChange={(event) => setConfiguration({ ...configuration, distribution: event.target.value })}><option value="">Select an installed WSL distribution</option>{wslDistributions.map((distribution) => <option key={distribution} value={distribution}>{distribution}</option>)}</select> : <input required={!field.optional} placeholder={field.placeholder} value={configuration[field.key] || ""} onChange={(event) => {
+            const value = event.target.value;
+            if (target === "remote-linux-compose" && field.key === "user") {
+              const previousDefault = remoteInstallDirectory(configuration.user || "");
+              const next: Record<string, string> = { ...configuration, user: value };
+              if (!configuration.installDirectory || configuration.installDirectory === previousDefault) next.installDirectory = remoteInstallDirectory(value);
+              setConfiguration(next);
+              return;
+            }
+            setConfiguration({ ...configuration, [field.key]: value });
+          }} />}</label>)}
           <button type="submit">Create bound plan</button>
         </form>
         {planError && <div className="inline-result error" role="alert"><strong>Plan operation rejected</strong><p>{planError}</p></div>}

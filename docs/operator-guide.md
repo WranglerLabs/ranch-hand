@@ -12,7 +12,7 @@ its [manual deployment recipes](https://github.com/WranglerLabs/repo-wrangler/tr
 
 ## Current availability
 
-There is no signed GA Ranch Hand installer yet. `v0.1.0-rc.14` is an unsigned
+There is no signed GA Ranch Hand installer yet. `v0.1.0-rc.19` is an unsigned
 Public Preview published as a stable prerelease download. It is intended for
 evaluation and feedback, not production support.
 
@@ -23,13 +23,13 @@ organizational security policy.
 ## Download and verify the Public Preview
 
 1. Open the public [Ranch Hand for Windows guide](https://wranglerlabs.org/ranch-hand)
-   and select **Download Ranch Hand v0.1.0-rc.14 for Windows (64-bit)**. A GitHub
+   and select **Download Ranch Hand v0.1.0-rc.19 for Windows (64-bit)**. A GitHub
    account is not required.
 2. In PowerShell, verify the executable before running it:
 
    ```powershell
-   Get-FileHash .\ranch-hand-v0.1.0-rc.14-windows-amd64.exe -Algorithm SHA256
-   Get-AuthenticodeSignature .\ranch-hand-v0.1.0-rc.14-windows-amd64.exe
+   Get-FileHash .\ranch-hand-v0.1.0-rc.19-windows-amd64.exe -Algorithm SHA256
+   Get-AuthenticodeSignature .\ranch-hand-v0.1.0-rc.19-windows-amd64.exe
    ```
 
    Compare the result with the `.sha256` file published beside the executable
@@ -40,7 +40,7 @@ organizational security policy.
 3. For optional GitHub provenance verification, install GitHub CLI and run:
 
    ```powershell
-   gh attestation verify .\ranch-hand-v0.1.0-rc.14-windows-amd64.exe `
+   gh attestation verify .\ranch-hand-v0.1.0-rc.19-windows-amd64.exe `
      --repo WranglerLabs/ranch-hand
    ```
 
@@ -49,7 +49,7 @@ Windows code-signing certificate.
 
 ## Launch Ranch Hand
 
-Double-click `ranch-hand-v0.1.0-rc.14-windows-amd64.exe`, or start it from
+Double-click `ranch-hand-v0.1.0-rc.19-windows-amd64.exe`, or start it from
 PowerShell. Ranch Hand binds a random port on `127.0.0.1`, opens the interface in
 your default browser, and protects that browser session with a random one-time
 launch token.
@@ -71,7 +71,7 @@ existing environment.
 | Local Docker Desktop | Windows Package Manager, or an already installed Docker Desktop running Linux containers | If unavailable, Ranch Hand offers to install Docker Desktop through `winget`; administrator approval, first-run terms, and startup may still be required. Windows Docker API, loopback-only demo/SQLite deployment. Full backup, update, restore, rollback, repair, recovery, and rollback-pool retention are available. |
 | Azure Container Apps | An Azure subscription, permission to create a dedicated resource group and ACA resources, and a temporary ARM access token | New resource group, demo mode, SQLite on Azure Files, and Azure-managed HTTPS. Resources can incur Azure charges. Existing groups, PostgreSQL, production credentials, custom domains, and update are not enabled. |
 | Cloudflare | Account ID, unused Worker and D1 names, a workers.dev subdomain, and a scoped API token with account read, Workers Scripts write, and D1 write access | New Worker and D1 database in demo mode with Cloudflare-managed workers.dev HTTPS. Existing resources, custom domains, production secrets, backup, and update are not enabled. |
-| Remote Linux Docker Compose | Existing Ubuntu/Debian host and an SSH password or private key; sudo is needed only when Docker prerequisites are missing | If Engine or Compose is missing, Ranch Hand offers a bounded sudo-backed install, starts Docker, grants the user access, and reruns preflight. SSH port and project are prefilled; entering the user fills its default installation directory. The successful credential is reused for installation only in memory. New dedicated project remains bound to remote loopback. Ranch Hand does not install public ingress, a proxy, or Linux. Backup and update are not enabled. |
+| Remote Linux Docker Compose | Existing Ubuntu/Debian host and an SSH password or private key; sudo is needed only when Docker prerequisites are missing | If Engine or Compose is missing, Ranch Hand offers a bounded sudo-backed install, starts Docker, grants the user access, and reruns preflight. Ranch Hand verifies the public image archive on Windows, streams it to Docker over the pinned SSH connection, verifies the loaded image ID, and disables registry pulls. The target needs no GitHub account, GHCR login, token, or registry access. SSH port and project are prefilled; entering the user fills its default installation directory. The successful credential is reused for installation only in memory. New dedicated project remains bound to remote loopback. Ranch Hand does not install public ingress, a proxy, or Linux. Backup and update are not enabled. |
 
 Azure, Cloudflare, and Remote Linux credentials are entered once for live
 preflight. After a successful check, Ranch Hand retains the credential only in

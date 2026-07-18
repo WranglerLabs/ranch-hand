@@ -6,6 +6,28 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.19] - 2026-07-18
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- Remote Linux installation no longer pulls RepoWrangler from GHCR. Ranch Hand
+  downloads and verifies the public release image archive on Windows, streams
+  it directly to `docker image load` over the pinned SSH connection, verifies
+  the exact immutable image ID, and runs Compose with `pull_policy: never`.
+- A Remote Linux target no longer needs a GitHub account, GHCR login, registry
+  token, or direct registry access to install the supported RepoWrangler image.
+- The install regression suite now exercises verified archive download, SSH
+  transfer, target image verification, and Compose startup while asserting that
+  no registry pull command is issued.
+
+### Verification
+
+- Full Go test suite passes.
+- `go vet ./...` passes.
+
 ## [0.1.0-rc.18] - 2026-07-18
 
 **Classification: Public Preview.** Publicly downloadable and intended for

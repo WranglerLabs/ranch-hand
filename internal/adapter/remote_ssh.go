@@ -23,10 +23,19 @@ type remoteHost interface {
 	Close() error
 }
 
+// remoteImageLoader transfers an image archive directly to Docker over the
+// already authenticated and host-key-verified SSH connection. Keeping the
+// archive out of the shell command avoids command-size, quoting, and secret
+// handling hazards for large binary release artifacts.
+type remoteImageLoader interface {
+	LoadImage(context.Context, io.Reader) (string, error)
+}
+
 type remoteConnector func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error)
 
 type RemoteLinuxCompose struct {
-	connect remoteConnector
+	connect             remoteConnector
+	prepareReleaseImage func(context.Context, plan.DeploymentPlan, Credentials, string) (string, error)
 }
 
 type SSHHostIdentity struct {
@@ -68,11 +77,21 @@ func InspectSSHHostKey(ctx context.Context, host, port string) (SSHHostIdentity,
 }
 
 func NewRemoteLinuxCompose() *RemoteLinuxCompose {
-	return &RemoteLinuxCompose{connect: connectRemoteLinux}
+	adapter := &RemoteLinuxCompose{connect: connectRemoteLinux}
+	adapter.prepareReleaseImage = adapter.prepareRemoteCompanion
+	return adapter
 }
 
 func newRemoteLinuxCompose(connect remoteConnector) *RemoteLinuxCompose {
-	return &RemoteLinuxCompose{connect: connect}
+	adapter := &RemoteLinuxCompose{connect: connect}
+	// This constructor is used by the WSL delegate and adapter tests. WSL calls
+	// apply only after loading and verifying its companion image. Tests replace
+	// this resolver when they exercise the real archive-transfer preparation.
+	adapter.prepareReleaseImage = func(_ context.Context, _ plan.DeploymentPlan, _ Credentials, image string) (string, error) {
+		companion, err := companionForImage(image)
+		return companion.runtimeImage, err
+	}
+	return adapter
 }
 
 func (a *RemoteLinuxCompose) Preflight(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) Report {
@@ -271,6 +290,34 @@ func (h *sshRemoteHost) Run(ctx context.Context, command string, stdin []byte) (
 	}
 	if output.truncated {
 		return "", fmt.Errorf("remote command output exceeded 64 KiB")
+	}
+	return strings.TrimSpace(output.String()), err
+}
+
+func (h *sshRemoteHost) LoadImage(ctx context.Context, source io.Reader) (string, error) {
+	session, err := h.client.NewSession()
+	if err != nil {
+		return "", err
+	}
+	defer session.Close()
+	session.Stdin = source
+	output := &limitedOutput{maximum: 64 << 10}
+	session.Stdout = output
+	session.Stderr = output
+	if err := session.Start("docker image load"); err != nil {
+		return "", err
+	}
+	done := make(chan error, 1)
+	go func() { done <- session.Wait() }()
+	select {
+	case err = <-done:
+	case <-ctx.Done():
+		_ = session.Close()
+		<-done
+		err = ctx.Err()
+	}
+	if output.truncated {
+		return "", errors.New("remote Docker image-load output exceeded 64 KiB")
 	}
 	return strings.TrimSpace(output.String()), err
 }

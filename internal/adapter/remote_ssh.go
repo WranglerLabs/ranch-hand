@@ -51,9 +51,14 @@ func (a *RemoteLinuxCompose) Preflight(ctx context.Context, candidate plan.Deplo
 	defer host.Close()
 	appendCheck(&report, "ssh-host-identity", true, "Ranch Hand connected through native SSH and verified the pinned host identity.")
 
+	if _, err := host.Run(ctx, `command -v docker`, nil); err != nil {
+		appendCheck(&report, "remote-docker-command", false, "Docker is not installed on the remote Linux server for this account. Install Docker Engine and the Docker Compose v2 plugin, then retry.")
+		return report
+	}
+	appendCheck(&report, "remote-docker-command", true, "The Docker command is installed on the remote Linux server.")
 	dockerVersion, err := host.Run(ctx, `docker version --format '{{.Server.Version}}/{{.Server.Os}}/{{.Server.Arch}}'`, nil)
 	if err != nil || !strings.Contains(dockerVersion, "/linux/") {
-		appendCheck(&report, "remote-docker-engine", false, "The remote account cannot reach a Linux Docker Engine.")
+		appendCheck(&report, "remote-docker-engine", false, "Docker is installed, but the Linux Docker Engine is not running or the remote account is not authorized to reach it.")
 		return report
 	}
 	appendCheck(&report, "remote-docker-engine", true, "The remote account can reach a Linux Docker Engine ("+dockerVersion+").")
@@ -160,10 +165,7 @@ func (h *sshRemoteHost) Run(ctx context.Context, command string, stdin []byte) (
 	// resulting script over stdin prevents those values from becoming the SSH
 	// command itself. Optional file content is quoted as data and piped to the
 	// internal command, never concatenated unquoted into the script.
-	script := command + "\n"
-	if len(stdin) > 0 {
-		script = "printf '%s' " + shellQuote(string(stdin)) + " | " + command + "\n"
-	}
+	script := remoteShellScript(command, stdin)
 	session.Stdin = strings.NewReader(script)
 	output := &limitedOutput{maximum: 64 << 10}
 	session.Stdout = output
@@ -184,6 +186,15 @@ func (h *sshRemoteHost) Run(ctx context.Context, command string, stdin []byte) (
 		return "", fmt.Errorf("remote command output exceeded 64 KiB")
 	}
 	return strings.TrimSpace(output.String()), err
+}
+
+func remoteShellScript(command string, stdin []byte) string {
+	if len(stdin) == 0 {
+		return command + "\n"
+	}
+	// Keep a compound command in one pipeline consumer. Without the subshell,
+	// "printf | umask; cat" feeds umask and leaves cat with an empty stream.
+	return "printf '%s' " + shellQuote(string(stdin)) + " | ( " + command + " )\n"
 }
 
 func (h *sshRemoteHost) Health(ctx context.Context, requestPath string) (int, []byte, error) {

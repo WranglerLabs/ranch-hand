@@ -6,6 +6,32 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.9] - 2026-07-17
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- Corrected the shared WSL/SSH file-transfer shell wrapper. Payloads are now
+  piped into the entire compound `umask; cat; chmod; mv` command, rather than
+  into `umask` alone, which had created empty Compose, environment, and marker
+  files and caused every remote-style Compose apply to fail.
+- Added narrowly scoped recovery for the exact empty marker and empty deployment
+  files produced by that defect. Docker resources, non-empty or invalid markers,
+  unknown content, and symlinks remain hard cleanup stops.
+- Retained the one-time launch token in browser `sessionStorage` after removing
+  it from the address bar, allowing a same-tab refresh without losing the
+  authenticated loopback session. Closing the tab still clears it.
+- Preserved bounded, sanitized Docker Compose command output in apply failures
+  instead of reporting only `exit status 1`.
+
+### Added
+
+- Distinguished a missing Docker command from a stopped/unauthorized Docker
+  Engine and a missing Compose v2 plugin during WSL and remote Linux preflight.
+- Added a Windows loopback port 8080 availability check before WSL mutation.
+
 ## [0.1.0-rc.8] - 2026-07-17
 
 **Classification: Public Preview.** Publicly downloadable and intended for

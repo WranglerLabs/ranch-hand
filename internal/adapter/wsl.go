@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/WranglerLabs/ranch-hand/internal/bundle"
@@ -49,9 +50,14 @@ func (a *WSLCompose) Preflight(ctx context.Context, candidate plan.DeploymentPla
 		return report
 	}
 	defer host.Close()
+	if _, err := host.Run(ctx, `command -v docker`, nil); err != nil {
+		appendCheck(&report, "wsl-docker-command", false, "Docker is not installed inside the selected WSL distribution. Install Docker Engine and the Docker Compose v2 plugin there, then retry.")
+		return report
+	}
+	appendCheck(&report, "wsl-docker-command", true, "The Docker command is installed inside WSL.")
 	dockerVersion, err := host.Run(ctx, `docker version --format '{{.Server.Version}}/{{.Server.Os}}/{{.Server.Arch}}'`, nil)
 	if err != nil || !strings.Contains(dockerVersion, "/linux/") {
-		appendCheck(&report, "wsl-docker-engine", false, "Docker is installed, but its Linux Docker Engine is not running or is unavailable to the WSL user. Start the Docker service inside this distribution and retry.")
+		appendCheck(&report, "wsl-docker-engine", false, "Docker is installed, but its Linux Docker Engine is not running or the WSL user is not authorized to reach it. Start the service or correct Docker group access, then retry.")
 		return report
 	}
 	appendCheck(&report, "wsl-docker-engine", true, "The WSL user can reach Linux Docker Engine "+dockerVersion+".")
@@ -71,6 +77,13 @@ func (a *WSLCompose) Preflight(ctx context.Context, candidate plan.DeploymentPla
 		return report
 	}
 	appendCheck(&report, "wsl-compose-boundary", true, "The Compose project and Ranch Hand installation directory are unused.")
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:8080")
+	if err != nil {
+		appendCheck(&report, "wsl-loopback-port", false, "Windows loopback port 8080 is already in use. Stop the existing service before installing this WSL evaluation target.")
+		return report
+	}
+	_ = listener.Close()
+	appendCheck(&report, "wsl-loopback-port", true, "Windows loopback port 8080 is available for RepoWrangler.")
 	appendCheck(&report, "wsl-loopback", true, "RepoWrangler will use Docker-managed storage and Windows loopback http://127.0.0.1:8080; no WSL path or IP address is required.")
 	report.Ready = true
 	return report

@@ -98,9 +98,16 @@ function remoteInstallDirectory(user: string): string {
   return user === "root" ? "/root/.repo-wrangler-ranch-hand" : `/home/${user}/.repo-wrangler-ranch-hand`;
 }
 
-const token = window.location.hash.startsWith("#token=")
+const tokenFromHash = window.location.hash.startsWith("#token=")
   ? decodeURIComponent(window.location.hash.slice(7))
   : "";
+let token = tokenFromHash;
+try {
+  if (tokenFromHash) sessionStorage.setItem("ranch-hand-launch-token", tokenFromHash);
+  else token = sessionStorage.getItem("ranch-hand-launch-token") || "";
+} catch {
+  // A browser that disables session storage can still use the original launch tab.
+}
 
 if (window.location.hash) {
   history.replaceState(null, "", window.location.pathname);
@@ -245,12 +252,19 @@ function App() {
   }, [installing]);
 
   useEffect(() => {
+    if (!recoveringDeployment) return;
+    void refreshActiveOperations();
+    const timer = window.setInterval(() => { void refreshActiveOperations(); }, 1000);
+    return () => window.clearInterval(timer);
+  }, [recoveringDeployment]);
+
+  useEffect(() => {
     if (operationResult) void refreshInstallations();
   }, [operationResult]);
 
   async function recoverActiveOperation(operation: ActiveOperation) {
     setRecoveringDeployment(operation.deploymentId);
-    setRecoveryMessage("");
+    setRecoveryMessage(operation.target === "local-wsl-compose" ? "Removing the failed WSL installation and releasing its lifecycle lock. Keep this Ranch Hand tab open." : "Running ownership-checked recovery. Keep this Ranch Hand tab open.");
     try {
       const result = await api<{ completed: boolean; operation: { recovered: boolean; safelyClosed: boolean } }>(`/api/v1/operations/${operation.deploymentId}/recover`, {
         method: "POST",

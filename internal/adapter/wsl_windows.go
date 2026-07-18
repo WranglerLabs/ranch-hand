@@ -68,10 +68,7 @@ type wslHost struct {
 }
 
 func (h *wslHost) Run(ctx context.Context, command string, stdin []byte) (string, error) {
-	script := command + "\n"
-	if len(stdin) > 0 {
-		script = "printf '%s' " + shellQuote(string(stdin)) + " | " + command + "\n"
-	}
+	script := remoteShellScript(command, stdin)
 	process := exec.CommandContext(ctx, "wsl.exe", "-d", h.distribution, "--", "sh", "-s")
 	process.Stdin = strings.NewReader(script)
 	output := &limitedOutput{maximum: 64 << 10}

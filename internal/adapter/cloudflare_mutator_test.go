@@ -60,6 +60,10 @@ func TestCloudflareEvaluationInstallUsesNativeAPIsAndVerifiesIdentity(t *testing
 			t.Fatal("Cloudflare request omitted authorization")
 		}
 		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/subscriptions"):
+			writeCloudflareResult(w, `[]`)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/workers/scripts"):
+			writeCloudflareResult(w, `[]`)
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/workers/scripts/repo-wrangler") && !strings.HasSuffix(r.URL.Path, "/settings") && !strings.HasSuffix(r.URL.Path, "/subdomain") && !strings.HasSuffix(r.URL.Path, "/schedules"):
 			http.Error(w, "missing", http.StatusNotFound)
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/d1/database"):
@@ -272,6 +276,40 @@ func TestCloudflareRecoveryRefusesUnownedDatabase(t *testing.T) {
 	err := newCloudflare(server.Client(), server.URL).Recover(context.Background(), lifecycle.Install, cloudflareEvaluationPlan(), "", lifecycle.OperationBackups{}, Credentials{CloudflareAPIToken: "cf-token"})
 	if err == nil || deleted {
 		t.Fatal("Cloudflare recovery deleted or accepted an unowned database")
+	}
+}
+
+func TestCloudflareInstallRejectsExhaustedCronCapacityBeforeMutation(t *testing.T) {
+	databaseCreated := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/d1/database"):
+			writeCloudflareResult(w, `[]`)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/workers/scripts/repo-wrangler"):
+			http.Error(w, "missing", http.StatusNotFound)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/subscriptions"):
+			writeCloudflareResult(w, `[]`)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/workers/scripts"):
+			writeCloudflareResult(w, `[{"id":"one"},{"id":"two"}]`)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/workers/scripts/one/schedules"):
+			writeCloudflareResult(w, `{"schedules":[{"cron":"1 * * * *"},{"cron":"2 * * * *"},{"cron":"3 * * * *"}]}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/workers/scripts/two/schedules"):
+			writeCloudflareResult(w, `{"schedules":[{"cron":"4 * * * *"},{"cron":"5 * * * *"}]}`)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/d1/database"):
+			databaseCreated = true
+			writeCloudflareResult(w, `{"name":"repo-wrangler","uuid":"`+cloudflareTestDatabaseID+`"}`)
+		default:
+			t.Fatalf("unexpected Cloudflare capacity request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	err := newCloudflare(server.Client(), server.URL).Apply(context.Background(), lifecycle.Install, cloudflareEvaluationPlan(), "", stagedCloudflareBundle(t), lifecycle.OperationBackups{}, Credentials{CloudflareAPIToken: "cf-token"})
+	if err == nil || !strings.Contains(err.Error(), "uses 5 of 5 Cron Triggers") {
+		t.Fatalf("expected precise Cron capacity failure, got %v", err)
+	}
+	if databaseCreated {
+		t.Fatal("Cloudflare install created D1 before rejecting exhausted Cron capacity")
 	}
 }
 

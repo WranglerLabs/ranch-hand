@@ -104,6 +104,9 @@ func (c *Cloudflare) Apply(ctx context.Context, kind lifecycle.OperationKind, ca
 	if err := c.requireAvailable(ctx, account, worker, database, headers); err != nil {
 		return err
 	}
+	if err := c.requireScheduleCapacity(ctx, account, len(identity.Crons), headers); err != nil {
+		return fmt.Errorf("verify Cloudflare Cron Trigger capacity: %w", err)
+	}
 	deploymentID, err := lifecycle.DeploymentID(candidate)
 	if err != nil {
 		return err
@@ -508,6 +511,59 @@ func (c *Cloudflare) updateSchedules(ctx context.Context, account, worker string
 		schedules[index] = map[string]string{"cron": cron}
 	}
 	return c.cloudflareJSON(ctx, http.MethodPut, c.baseURL+"/accounts/"+account+"/workers/scripts/"+worker+"/schedules", headers, schedules, nil)
+}
+
+func (c *Cloudflare) requireScheduleCapacity(ctx context.Context, account string, required int, headers map[string]string) error {
+	if required == 0 {
+		return nil
+	}
+	var subscriptions []struct {
+		RatePlan struct {
+			ID         string `json:"id"`
+			PublicName string `json:"public_name"`
+			Scope      string `json:"scope"`
+		} `json:"rate_plan"`
+	}
+	if err := c.cloudflareJSON(ctx, http.MethodGet, c.baseURL+"/accounts/"+account+"/subscriptions", headers, nil, &subscriptions); err != nil {
+		// Some otherwise sufficient scoped tokens cannot read billing. In that case,
+		// retain Cloudflare's authoritative schedule update as the final capacity gate.
+		return nil
+	}
+	limit := 5
+	for _, subscription := range subscriptions {
+		id := strings.ToLower(subscription.RatePlan.ID)
+		name := strings.ToLower(subscription.RatePlan.PublicName)
+		if subscription.RatePlan.Scope == "account" && (strings.Contains(id, "workers_paid") || strings.Contains(name, "workers paid")) {
+			limit = 250
+			break
+		}
+	}
+	var scripts []struct {
+		ID string `json:"id"`
+	}
+	if err := c.cloudflareJSON(ctx, http.MethodGet, c.baseURL+"/accounts/"+account+"/workers/scripts", headers, nil, &scripts); err != nil {
+		return nil
+	}
+	used := 0
+	for _, script := range scripts {
+		if script.ID == "" {
+			continue
+		}
+		var schedules struct {
+			Schedules []struct {
+				Cron string `json:"cron"`
+			} `json:"schedules"`
+		}
+		destination := c.baseURL + "/accounts/" + account + "/workers/scripts/" + url.PathEscape(script.ID) + "/schedules"
+		if err := c.cloudflareJSON(ctx, http.MethodGet, destination, headers, nil, &schedules); err != nil {
+			return nil
+		}
+		used += len(schedules.Schedules)
+	}
+	if used+required > limit {
+		return fmt.Errorf("the account already uses %d of %d Cron Triggers and the verified bundle requires %d more; use a dedicated account with capacity or upgrade its Workers plan", used, limit, required)
+	}
+	return nil
 }
 
 func (c *Cloudflare) enableWorkersDev(ctx context.Context, account, worker string, headers map[string]string) error {

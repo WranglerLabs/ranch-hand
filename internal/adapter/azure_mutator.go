@@ -53,6 +53,12 @@ func (a *AzureContainerApps) Apply(ctx context.Context, kind lifecycle.Operation
 	if staged.Target != "azure-container-apps" {
 		return errors.New("Azure adapter requires an azure-container-apps bundle")
 	}
+	if a.verifyPublicImage == nil {
+		return errors.New("Azure public image verifier is unavailable")
+	}
+	if err := a.verifyPublicImage(ctx, identity.Image); err != nil {
+		return fmt.Errorf("verify exact release image before Azure mutation: %w", err)
+	}
 	template, err := readARMTemplate(staged)
 	if err != nil {
 		return err

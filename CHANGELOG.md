@@ -10,6 +10,9 @@ generally available or production-supported releases.
   public image archive through the native Docker Engine API and verify its
   immutable image ID, removing the erroneous dependency on anonymous GHCR
   access.
+- Azure staged preflight now proves that the exact digest-pinned release image
+  is anonymously pullable and content-matches its digest before Ranch Hand can
+  create a resource group.
 
 ### Fixed
 

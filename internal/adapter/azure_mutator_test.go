@@ -80,6 +80,7 @@ func TestAzureEvaluationInstallDeploysVerifiedTemplateAndChecksIdentity(t *testi
 	}))
 	defer server.Close()
 	adapter := newAzureContainerApps(server.Client(), server.URL)
+	adapter.verifyPublicImage = func(context.Context, string) error { return nil }
 	adapter.healthClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Scheme != "https" || !strings.HasSuffix(r.URL.Host, ".azurecontainerapps.io") {
 			t.Fatalf("health verification escaped Azure-managed HTTPS: %s", r.URL)

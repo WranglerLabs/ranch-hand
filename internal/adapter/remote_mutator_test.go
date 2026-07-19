@@ -294,7 +294,7 @@ func TestWSLEnvironmentRemainsLoopbackOnly(t *testing.T) {
 	candidate := remoteEvaluationPlan()
 	candidate.Target.Kind = "local-wsl-compose"
 	candidate.Configuration = map[string]string{"distribution": "Ubuntu-26.04", "projectName": "repo-wrangler", "demoMode": "false"}
-	environment, err := remoteEnvironment(candidate, Credentials{})
+	environment, err := remoteEnvironment(candidate, Credentials{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +361,7 @@ func TestWSLStyleInstallUsesVerifiedLoadedImageWithoutRegistryPull(t *testing.T)
 			t.Fatal(err)
 		}
 	}
-	if err := adapter.apply(context.Background(), lifecycle.Install, candidate, staged, lifecycle.OperationBackups{}, Credentials{}, repoWranglerV1010Companion.runtimeImage); err != nil {
+	if err := adapter.apply(context.Background(), lifecycle.Install, candidate, staged, lifecycle.OperationBackups{}, Credentials{}, repoWranglerV1010Companion.runtimeImage, false); err != nil {
 		t.Fatal(err)
 	}
 	for _, command := range host.commands {
@@ -398,7 +398,7 @@ func TestWSLStyleVerificationRejectsRepointedRuntimeTag(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := adapter.apply(context.Background(), lifecycle.Install, candidate, staged, lifecycle.OperationBackups{}, Credentials{}, repoWranglerV1010Companion.runtimeImage); err != nil {
+	if err := adapter.apply(context.Background(), lifecycle.Install, candidate, staged, lifecycle.OperationBackups{}, Credentials{}, repoWranglerV1010Companion.runtimeImage, false); err != nil {
 		t.Fatal(err)
 	}
 	host.badImageID = true

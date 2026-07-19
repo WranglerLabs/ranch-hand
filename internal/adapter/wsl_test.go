@@ -47,3 +47,21 @@ func TestWSLNormalizationPreservesLegacyPlanIdentityWithoutEmptyDemoField(t *tes
 		t.Fatal("legacy WSL plan gained an empty demoMode field and changed identity")
 	}
 }
+
+func TestNormalizedWSLRealModeDoesNotRequireRemoteSetupToken(t *testing.T) {
+	candidate := targetPlan("local-wsl-compose", map[string]string{
+		"distribution": "Ubuntu", "projectName": "repo-wrangler", "demoMode": "false",
+	})
+	normalized, err := normalizeWSLPlan(context.Background(), candidate, newFakeRemoteHost())
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment, err := remoteEnvironment(normalized, Credentials{}, false)
+	if err != nil {
+		t.Fatalf("normalized local WSL real mode incorrectly required remote credentials: %v", err)
+	}
+	contents := string(environment)
+	if !strings.Contains(contents, "DEMO_MODE=false") || !strings.Contains(contents, "PUBLIC_BASE_URL=http://127.0.0.1:8080") || strings.Contains(contents, "SETUP_TOKEN=") {
+		t.Fatalf("normalized local WSL environment crossed the remote setup boundary: %s", contents)
+	}
+}

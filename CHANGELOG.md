@@ -6,6 +6,28 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.25] - 2026-07-18
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- Ranch Hand now installs RepoWrangler v1.0.15 across WSL, Remote Linux,
+  Docker Desktop, Azure Container Apps, and Cloudflare targets.
+- GitHub App onboarding posts its public manifest directly to GitHub for a
+  personal account or organization instead of opening the intermediate local
+  `/setup/github-app` page that could produce a browser connection failure.
+- The v1.0.15 offline trust record pins the registry index, archive manifest,
+  image config, archive SHA-256, and exact byte size.
+
+### Verification
+
+- RepoWrangler's Node/Compose and Cloudflare Worker setup routes, manifest
+  callbacks, and deployment-origin URLs have regression coverage.
+- Full Ranch Hand Go tests, vet, web build, and Windows executable smoke test
+  pass.
+
 ## [0.1.0-rc.24] - 2026-07-18
 
 **Classification: Public Preview.** Publicly downloadable and intended for

@@ -11,6 +11,7 @@
   "scripts": {
     "build": "corepack pnpm --dir web build",
     "dev": "corepack pnpm --dir web dev",
+    "test:release-contracts": "node --test scripts/*.test.mjs",
     "typecheck": "corepack pnpm --dir web typecheck"
   }
 }

@@ -6,6 +6,24 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+- Docker Desktop installation and replacement now load the release's verified
+  public image archive through the native Docker Engine API and verify its
+  immutable image ID, removing the erroneous dependency on anonymous GHCR
+  access.
+- Azure staged preflight now proves that the exact digest-pinned release image
+  is anonymously pullable and content-matches its digest before Ranch Hand can
+  create a resource group.
+
+### Fixed
+
+- WSL real-mode installation no longer inherits the Remote Linux requirement
+  for a generated setup token when the WSL plan is normalized through the
+  shared Compose implementation.
+- Managed permanent uninstall now covers Docker Desktop, WSL Compose, Remote
+  Linux Compose, Azure Container Apps, and Cloudflare Worker plus D1. Every
+  adapter verifies its exact ownership evidence before deleting persistent
+  data, and remote or cloud credentials remain in memory only.
+
 ## [0.1.0-rc.26] - 2026-07-19
 
 **Classification: Public Preview.** Publicly downloadable and intended for

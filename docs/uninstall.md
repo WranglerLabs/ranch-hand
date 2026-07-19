@@ -1,15 +1,15 @@
 # Remove a Ranch Hand evaluation deployment
 
-Ranch Hand Public Preview provides managed permanent removal for active local
-WSL Compose deployments. Open **Managed deployments**, select the data-deletion
-confirmation, and choose **Permanently remove deployment**. Ranch Hand verifies
-the exact ownership marker, transferred-file hashes, and Docker labels before
-removing the Compose project, persistent volume, dedicated directory, and active
-inventory record.
+Ranch Hand provides managed permanent removal for every active deployment type:
+Docker Desktop, WSL Compose, remote Linux Compose, Azure Container Apps, and
+Cloudflare Worker plus D1. Open **Managed deployments**, provide fresh target
+credentials when requested, select the data-deletion confirmation, and choose
+**Permanently remove deployment**. Ranch Hand refuses deletion unless the target
+resources match the exact deployment ownership identity and recorded release.
 
-Use this runbook for retain-data WSL removal or targets whose managed uninstall
-has not shipped. Manual steps act on the target and do not reconcile Ranch
-Hand's local evidence.
+Use the manual sections below only for retain-data removal or recovery when the
+managed action cannot safely complete. Manual steps act on the target and do not
+reconcile Ranch Hand's local evidence.
 
 ## Before removing anything
 
@@ -24,14 +24,17 @@ Hand's local evidence.
 
 Manual target removal keeps the installation record as evidence, so Ranch Hand
 continues to show the target as installed and will not reinstall over it. The
-managed WSL permanent-removal action reconciles its own record automatically.
+managed permanent-removal action reconciles its own record automatically.
 Do not delete or edit files below `%LOCALAPPDATA%\WranglerLabs\Ranch Hand`.
 
 ## Local Docker Desktop
 
 The managed container is `<projectName>-server`. The persistent volume is the
 plan's `dataVolume` value. Ranch Hand labels both with
-`wranglerlabs.ranch-hand.managed=true` and the deployment identity.
+`com.wranglerlabs.ranch-hand.managed=true` and the deployment identity.
+
+For permanent deletion, prefer **Managed deployments**. Ranch Hand verifies the
+container and volume labels before deleting both.
 
 1. In Docker Desktop, inspect the container and volume and confirm those labels.
 2. Stop and remove `<projectName>-server`.
@@ -79,6 +82,10 @@ that directory cleanup.
 
 ## Remote Linux Docker Compose
 
+For permanent deletion, prefer **Managed deployments** and provide a fresh SSH
+password or private key. Ranch Hand checks the marker, transferred-file hashes,
+container labels, and volume labels before removing anything.
+
 SSH to the exact private server and account recorded in the plan, then use the
 plan's `installDirectory` and `projectName`:
 
@@ -105,6 +112,11 @@ images during removal.
 The evaluation adapter creates a dedicated resource group whose name is stored
 in the plan.
 
+For permanent deletion, prefer **Managed deployments** and provide a temporary
+ARM access token. Ranch Hand deletes the resource group only when its managed,
+deployment, and release-version tags exactly match the installation record, and
+waits until Azure confirms the group no longer exists.
+
 1. Open that resource group in the Azure portal and confirm its Container App,
    Container Apps environment, storage resources, and Ranch Hand deployment
    identity match the plan.
@@ -121,6 +133,12 @@ must be investigated instead of removed with this procedure.
 ## Cloudflare Worker and D1
 
 The plan records the dedicated Worker name and D1 database name.
+
+For permanent deletion, prefer **Managed deployments** and provide a scoped
+Cloudflare API token. Ranch Hand verifies the D1 ownership row and the Worker's
+D1 binding and release version, deletes the Worker first, and then deletes the
+owned D1 database. A Worker without its D1 ownership marker is left untouched
+and reported as an error.
 
 1. In the Cloudflare dashboard, confirm both names and inspect the D1 ownership
    marker before deletion.

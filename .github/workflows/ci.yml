@@ -22,6 +22,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm build
+      - run: pnpm test:release-contracts
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.x'
@@ -76,6 +77,11 @@ jobs:
           test "$(docker image inspect --format '{{.Id}}' "$RUNTIME_IMAGE")" = "$IMAGE_CONFIG_DIGEST"
           test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$RUNTIME_IMAGE")" = "$RELEASE_VERSION"
           test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$RUNTIME_IMAGE")" = 'f99609eadb6aec4803c9cd41ab50049ff38d4c87'
+      - name: Verify Azure and Docker can pull the release image anonymously
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/verify-public-registry-image.mjs "ghcr.io/wranglerlabs/repo-wrangler-server@${REGISTRY_DIGEST}"
       - name: Compose-start and exercise the published first-run application
         shell: bash
         run: |

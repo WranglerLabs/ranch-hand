@@ -42,6 +42,10 @@ var cloudflareManagedHostname = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[
 type cloudflareEnvelope struct {
 	Success bool            `json:"success"`
 	Result  json.RawMessage `json:"result"`
+	Errors  []struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"errors"`
 }
 
 type cloudflareDatabase struct {
@@ -66,6 +70,12 @@ func (c *Cloudflare) Backup(context.Context, plan.DeploymentPlan, string, Creden
 }
 
 func (c *Cloudflare) Apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, _ string, staged bundle.StagedBundle, backups lifecycle.OperationBackups, credentials Credentials) error {
+	if kind == lifecycle.Uninstall {
+		if backups.Selected != nil || backups.Safety != nil {
+			return errors.New("Cloudflare uninstall does not accept backup state")
+		}
+		return c.removeOwnedDeployment(ctx, candidate, credentials)
+	}
 	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return errors.New("the Cloudflare adapter currently supports only a new evaluation install")
 	}
@@ -93,6 +103,9 @@ func (c *Cloudflare) Apply(ctx context.Context, kind lifecycle.OperationKind, ca
 	headers := cloudflareHeaders(credentials)
 	if err := c.requireAvailable(ctx, account, worker, database, headers); err != nil {
 		return err
+	}
+	if err := c.requireScheduleCapacity(ctx, account, len(identity.Crons), headers); err != nil {
+		return fmt.Errorf("verify Cloudflare Cron Trigger capacity: %w", err)
 	}
 	deploymentID, err := lifecycle.DeploymentID(candidate)
 	if err != nil {
@@ -123,6 +136,52 @@ func (c *Cloudflare) Apply(ctx context.Context, kind lifecycle.OperationKind, ca
 		return fmt.Errorf("enable Cloudflare-managed HTTPS endpoint: %w", err)
 	}
 	c.rememberExpected(deploymentID, created.UUID, identity)
+	return nil
+}
+
+func (c *Cloudflare) removeOwnedDeployment(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) error {
+	if strings.TrimSpace(credentials.CloudflareAPIToken) == "" {
+		return errors.New("an in-memory Cloudflare API token is required for uninstall")
+	}
+	account, worker, databaseName := cloudflareNames(candidate)
+	headers := cloudflareHeaders(credentials)
+	databases, err := c.findDatabases(ctx, account, databaseName, headers)
+	if err != nil {
+		return err
+	}
+	if len(databases) == 0 {
+		status, _ := controlPlaneJSON(ctx, c.client, http.MethodGet, c.baseURL+"/accounts/"+account+"/workers/scripts/"+worker, headers, nil)
+		if status == http.StatusNotFound {
+			return nil
+		}
+		return errors.New("refusing to report uninstall complete while the Worker exists without its D1 ownership marker")
+	}
+	if len(databases) != 1 {
+		return errors.New("refusing uninstall because the D1 database identity is ambiguous")
+	}
+	deploymentID, err := lifecycle.DeploymentID(candidate)
+	if err != nil {
+		return err
+	}
+	if err := c.verifyOwnershipMarker(ctx, account, databases[0].UUID, deploymentID, candidate.Release.Version, headers); err != nil {
+		return err
+	}
+	status, _ := controlPlaneJSON(ctx, c.client, http.MethodGet, c.baseURL+"/accounts/"+account+"/workers/scripts/"+worker, headers, nil)
+	if status != http.StatusNotFound {
+		if status < 200 || status >= 300 {
+			return errors.New("owned Worker identity could not be inspected for uninstall")
+		}
+		if err := c.verifyWorkerSettings(ctx, account, worker, databases[0].UUID, candidate.Release.Version, nil, headers); err != nil {
+			return errors.New("refusing to delete a Worker that does not match the owned deployment")
+		}
+		if err := c.cloudflareJSON(ctx, http.MethodDelete, c.baseURL+"/accounts/"+account+"/workers/scripts/"+worker, headers, nil, nil); err != nil {
+			return fmt.Errorf("delete owned Worker: %w", err)
+		}
+	}
+	destination := c.baseURL + "/accounts/" + account + "/d1/database/" + url.PathEscape(databases[0].UUID)
+	if err := c.cloudflareJSON(ctx, http.MethodDelete, destination, headers, nil, nil); err != nil {
+		return fmt.Errorf("delete owned D1 database: %w", err)
+	}
 	return nil
 }
 
@@ -454,6 +513,59 @@ func (c *Cloudflare) updateSchedules(ctx context.Context, account, worker string
 	return c.cloudflareJSON(ctx, http.MethodPut, c.baseURL+"/accounts/"+account+"/workers/scripts/"+worker+"/schedules", headers, schedules, nil)
 }
 
+func (c *Cloudflare) requireScheduleCapacity(ctx context.Context, account string, required int, headers map[string]string) error {
+	if required == 0 {
+		return nil
+	}
+	var subscriptions []struct {
+		RatePlan struct {
+			ID         string `json:"id"`
+			PublicName string `json:"public_name"`
+			Scope      string `json:"scope"`
+		} `json:"rate_plan"`
+	}
+	if err := c.cloudflareJSON(ctx, http.MethodGet, c.baseURL+"/accounts/"+account+"/subscriptions", headers, nil, &subscriptions); err != nil {
+		// Some otherwise sufficient scoped tokens cannot read billing. In that case,
+		// retain Cloudflare's authoritative schedule update as the final capacity gate.
+		return nil
+	}
+	limit := 5
+	for _, subscription := range subscriptions {
+		id := strings.ToLower(subscription.RatePlan.ID)
+		name := strings.ToLower(subscription.RatePlan.PublicName)
+		if subscription.RatePlan.Scope == "account" && (strings.Contains(id, "workers_paid") || strings.Contains(name, "workers paid")) {
+			limit = 250
+			break
+		}
+	}
+	var scripts []struct {
+		ID string `json:"id"`
+	}
+	if err := c.cloudflareJSON(ctx, http.MethodGet, c.baseURL+"/accounts/"+account+"/workers/scripts", headers, nil, &scripts); err != nil {
+		return nil
+	}
+	used := 0
+	for _, script := range scripts {
+		if script.ID == "" {
+			continue
+		}
+		var schedules struct {
+			Schedules []struct {
+				Cron string `json:"cron"`
+			} `json:"schedules"`
+		}
+		destination := c.baseURL + "/accounts/" + account + "/workers/scripts/" + url.PathEscape(script.ID) + "/schedules"
+		if err := c.cloudflareJSON(ctx, http.MethodGet, destination, headers, nil, &schedules); err != nil {
+			return nil
+		}
+		used += len(schedules.Schedules)
+	}
+	if used+required > limit {
+		return fmt.Errorf("the account already uses %d of %d Cron Triggers and the verified bundle requires %d more; use a dedicated account with capacity or upgrade its Workers plan", used, limit, required)
+	}
+	return nil
+}
+
 func (c *Cloudflare) enableWorkersDev(ctx context.Context, account, worker string, headers map[string]string) error {
 	return c.cloudflareJSON(ctx, http.MethodPost, c.baseURL+"/accounts/"+account+"/workers/scripts/"+worker+"/subdomain", headers, map[string]bool{"enabled": true, "previews_enabled": false}, nil)
 }
@@ -635,6 +747,12 @@ func cloudflareHealthReady(ctx context.Context, client *http.Client, hostname, v
 }
 
 func (c *Cloudflare) Recover(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, _ string, backups lifecycle.OperationBackups, credentials Credentials) error {
+	if kind == lifecycle.Uninstall {
+		if backups.Selected != nil || backups.Safety != nil {
+			return errors.New("Cloudflare uninstall recovery does not accept backup state")
+		}
+		return c.removeOwnedDeployment(ctx, candidate, credentials)
+	}
 	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return errors.New("Cloudflare recovery currently supports only a failed new evaluation install")
 	}
@@ -729,7 +847,22 @@ func (c *Cloudflare) doCloudflare(request *http.Request, output any) error {
 	if len(contents) > maxControlPlaneResponse {
 		return errors.New("Cloudflare response exceeded the safety limit")
 	}
+	var envelope cloudflareEnvelope
+	envelopeValid := json.Unmarshal(contents, &envelope) == nil
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		if envelopeValid && len(envelope.Errors) > 0 {
+			message := strings.Map(func(value rune) rune {
+				if value < 0x20 || value == 0x7f {
+					return -1
+				}
+				return value
+			}, envelope.Errors[0].Message)
+			messageRunes := []rune(message)
+			if len(messageRunes) > 512 {
+				message = string(messageRunes[:512])
+			}
+			return fmt.Errorf("Cloudflare returned HTTP %d (code %d): %s", response.StatusCode, envelope.Errors[0].Code, message)
+		}
 		return fmt.Errorf("Cloudflare returned HTTP %d", response.StatusCode)
 	}
 	if len(contents) == 0 {
@@ -738,8 +871,7 @@ func (c *Cloudflare) doCloudflare(request *http.Request, output any) error {
 		}
 		return nil
 	}
-	var envelope cloudflareEnvelope
-	if err := json.Unmarshal(contents, &envelope); err != nil || !envelope.Success {
+	if !envelopeValid || !envelope.Success {
 		return errors.New("Cloudflare returned an unsuccessful or invalid response")
 	}
 	if output != nil {

@@ -19,6 +19,9 @@ generally available or production-supported releases.
 - WSL real-mode installation no longer inherits the Remote Linux requirement
   for a generated setup token when the WSL plan is normalized through the
   shared Compose implementation.
+- The non-Windows WSL adapter now shares the Windows image-loader signature,
+  and CI compiles and tests the Go code on Linux as well as Windows so
+  platform-specific interface drift cannot be merged unnoticed.
 - Managed permanent uninstall now covers Docker Desktop, WSL Compose, Remote
   Linux Compose, Azure Container Apps, and Cloudflare Worker plus D1. Every
   adapter verifies its exact ownership evidence before deleting persistent

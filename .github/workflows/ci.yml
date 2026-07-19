@@ -94,7 +94,7 @@ jobs:
           SESSION_SECRET=ranch-hand-public-artifact-session-secret
           SECRET_ENCRYPTION_KEY=ranch-hand-public-artifact-encryption-key
           ENV
-          cleanup() { docker compose --project-directory /tmp/compose --project-name ranch-hand-public-smoke down --volumes --remove-orphans; }
+          cleanup() { POSTGRES_PASSWORD=ranch-hand-postgres-profile-disabled docker compose --project-directory /tmp/compose --project-name ranch-hand-public-smoke down --volumes --remove-orphans; }
           trap cleanup EXIT
-          docker compose --project-directory /tmp/compose --project-name ranch-hand-public-smoke up --detach server
+          POSTGRES_PASSWORD=ranch-hand-postgres-profile-disabled docker compose --project-directory /tmp/compose --project-name ranch-hand-public-smoke up --detach server
           node scripts/smoke-public-repo-wrangler.mjs http://127.0.0.1:18080 1.0.16

@@ -6,6 +6,11 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.28] - 2026-07-19
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
 ### Added
 
 - The release picker now fetches and displays the complete compatible catalog
@@ -24,6 +29,17 @@ generally available or production-supported releases.
   plan through the internal remote-Compose transport, and new markers record
   the exact provenance-derived runtime image ID used for post-install
   verification and managed recovery.
+
+### Verification
+
+- The exact candidate fetched the live release catalog through RepoWrangler
+  v1.0.17, verified its manifest, bundle, SBOM, provenance, and offline image,
+  and completed a real-mode WSL installation.
+- The deployed container reported ready and live at v1.0.17, used the exact
+  provenance-derived runtime image ID recorded by Ranch Hand, committed its
+  lifecycle journal, and completed ownership-safe managed uninstall.
+- Windows validation, Linux Go test/vet, public product-artifact smoke, and both
+  CodeQL analyses passed for the release source.
 
 ## [0.1.0-rc.27] - 2026-07-19
 

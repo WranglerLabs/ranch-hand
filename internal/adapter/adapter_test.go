@@ -143,7 +143,7 @@ func TestPinnedSSHHostKeyRejectsMismatch(t *testing.T) {
 }
 
 func TestCredentialsClear(t *testing.T) {
-	credentials := Credentials{AzureAccessToken: "one", CloudflareAPIToken: "two", SSHPrivateKey: "three", SSHPrivateKeyPassphrase: "four", SSHPassword: "five", SudoPassword: "six"}
+	credentials := Credentials{AzureAccessToken: "one", CloudflareAPIToken: "two", SSHPrivateKey: "three", SSHPrivateKeyPassphrase: "four", SSHPassword: "five", SudoPassword: "six", SetupToken: "seven"}
 	credentials.Clear()
 	if credentials != (Credentials{}) {
 		t.Fatalf("credentials were not cleared: %+v", credentials)
@@ -166,5 +166,9 @@ func TestCredentialsRejectOversizedSecret(t *testing.T) {
 	credentials := Credentials{SSHPrivateKey: strings.Repeat("x", (1<<20)+1)}
 	if err := credentials.Validate(); err == nil {
 		t.Fatal("oversized private key was accepted")
+	}
+	credentials = Credentials{SetupToken: strings.Repeat("x", 513)}
+	if err := credentials.Validate(); err == nil {
+		t.Fatal("oversized setup token was accepted")
 	}
 }

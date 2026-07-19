@@ -43,6 +43,11 @@ type RollbackPoolEntry = { backupId: string; version: string; createdAt: string;
 type DiscoveredRelease = { version: string; manifestUrl: string; prerelease: boolean };
 type SSHHostIdentity = { algorithm: string; fingerprint: string };
 
+function generatedSetupToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
 const targetFields: Record<string, { key: string; label: string; placeholder: string; optional?: boolean }[]> = {
   "azure-container-apps": [
     { key: "subscriptionId", label: "Subscription ID", placeholder: "00000000-0000-0000-0000-000000000000" },
@@ -177,6 +182,7 @@ function App() {
   const [operationAzureToken, setOperationAzureToken] = useState("");
   const [operationCloudflareToken, setOperationCloudflareToken] = useState("");
   const [operationSSHCredentials, setOperationSSHCredentials] = useState<Record<string, string>>({});
+  const [remoteSetupToken, setRemoteSetupToken] = useState("");
   const [activeOperations, setActiveOperations] = useState<ActiveOperation[]>([]);
   const [recoveryCredentials, setRecoveryCredentials] = useState<Record<string, Record<string, string>>>({});
   const [recoveringDeployment, setRecoveringDeployment] = useState("");
@@ -404,6 +410,7 @@ function App() {
     setOperationAzureToken("");
     setOperationCloudflareToken("");
     setOperationSSHCredentials({});
+    setRemoteSetupToken("");
     setCurrentInstallation(null);
     setBackups([]);
     setSelectedBackupId("");
@@ -437,6 +444,7 @@ function App() {
     setOperationAzureToken("");
     setOperationCloudflareToken("");
     setOperationSSHCredentials({});
+    setRemoteSetupToken("");
     setCurrentInstallation(null);
     setBackups([]);
     setSelectedBackupId("");
@@ -782,10 +790,14 @@ function App() {
     setRemoteInstallMessage("Submitting the Remote Linux installation. Keep Ranch Hand open while it transfers, starts, and verifies RepoWrangler.");
     setOperationResult(null);
     setOperationKind("remote-install");
+    const setupToken = planResult.configuration.demoMode === "false"
+      ? (remoteSetupToken || generatedSetupToken())
+      : "";
+    if (setupToken) setRemoteSetupToken(setupToken);
     try {
       setOperationResult(await api<OperationResult>("/api/v1/operations/run", {
         method: "POST",
-        body: JSON.stringify({ kind: "install", plan: planResult, credentials: operationSSHCredentials }),
+        body: JSON.stringify({ kind: "install", plan: planResult, credentials: { ...operationSSHCredentials, setupToken } }),
       }));
       setOperationSSHCredentials({});
       setRemoteInstallMessage("RepoWrangler installation completed and passed verification.");
@@ -822,7 +834,7 @@ function App() {
         <form onSubmit={verifyRelease}>
           <label>Release choice<select value={releaseChoice} onChange={(event) => { setReleaseChoice(event.target.value as "stable" | "prerelease" | "specific"); setArtifact(null); setPlanResult(null); }}><option value="stable">Latest stable (recommended)</option><option value="prerelease">Latest prerelease</option><option value="specific">Specific version (advanced)</option></select></label>
           <label>RepoWrangler version<input required readOnly={releaseChoice !== "specific"} pattern="v[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9.-]+)?" placeholder={releaseLoading ? "Finding the latest compatible release…" : "v1.0.10"} value={version} onChange={(event) => setVersion(event.target.value)} /></label>
-          <label>Deployment target<select value={target} onChange={(event) => { const next = event.target.value; setTarget(next); setArtifact(null); setPlanResult(null); setConfiguration(targetDefaults[next] || {}); setRuntimeCredentials({}); setTargetReport(null); setStagedBundle(null); setInstallConfirmed(false); setWSLInstallMessage(""); setOperationResult(null); setOperationKind(null); setOperationAzureToken(""); setOperationCloudflareToken(""); setOperationSSHCredentials({}); }}><option value="local-wsl-compose">Local Docker Compose — WSL</option><option value="local-compose">Local Docker Desktop</option><option value="remote-linux-compose">Remote Linux Docker Compose</option><option value="cloudflare">Cloudflare</option><option value="azure-container-apps">Azure Container Apps</option></select></label>
+          <label>Deployment target<select value={target} onChange={(event) => { const next = event.target.value; setTarget(next); setArtifact(null); setPlanResult(null); setConfiguration(targetDefaults[next] || {}); setRuntimeCredentials({}); setTargetReport(null); setStagedBundle(null); setInstallConfirmed(false); setWSLInstallMessage(""); setOperationResult(null); setOperationKind(null); setOperationAzureToken(""); setOperationCloudflareToken(""); setOperationSSHCredentials({}); setRemoteSetupToken(""); }}><option value="local-wsl-compose">Local Docker Compose — WSL</option><option value="local-compose">Local Docker Desktop</option><option value="remote-linux-compose">Remote Linux Docker Compose</option><option value="cloudflare">Cloudflare</option><option value="azure-container-apps">Azure Container Apps</option></select></label>
           <button type="submit" disabled={verifying || releaseLoading || !version || !token}>{releaseLoading ? "Finding release…" : verifying ? "Verifying and caching…" : "Verify and cache release"}</button>
         </form>
         {releaseError && <div className="inline-result error" role="alert"><strong>Release rejected</strong><p>{releaseError}</p></div>}
@@ -876,7 +888,7 @@ function App() {
         {operationResult && operationKind === "repair" && <div className="inline-result success"><strong>Backup-first local repair committed</strong><p>Ranch Hand created a fresh consistent archive, reconstructed the same immutable release in a new owned volume, passed readiness and exact-version verification, and preserved the replaced container and untouched volume. The lifecycle journal is {operationResult.operation.journal.phase}.</p>{operationResult.operation.backup && <dl><div><dt>Fresh safety archive</dt><dd>{operationResult.operation.backup.artifact.locator}</dd></div><div><dt>Size</dt><dd>{operationResult.operation.backup.artifact.size.toLocaleString()} bytes</dd></div><div><dt>SHA-256</dt><dd className="digest">{operationResult.operation.backup.artifact.sha256}</dd></div></dl>}</div>}
         {operationResult && operationKind === "azure-install" && <div className="inline-result success"><strong>Azure evaluation installation committed</strong><p>The ARM deployment, digest-pinned image, Azure-managed HTTPS endpoint, readiness, and exact immutable release identity passed verification. The lifecycle journal is {operationResult.operation.journal.phase}.</p></div>}
         {operationResult && operationKind === "cloudflare-install" && <div className="inline-result success"><strong>Cloudflare evaluation installation committed</strong><p>The D1 ownership marker and migrations, Worker module and assets, schedules, Cloudflare-managed HTTPS endpoint, readiness, and exact immutable release identity passed verification. The lifecycle journal is {operationResult.operation.journal.phase}.</p></div>}
-        {operationResult && operationKind === "remote-install" && <div className="inline-result success"><strong>Remote Linux evaluation installation committed</strong><p>The transferred files, target-side ownership marker, Docker labels, immutable image, private-network binding, target-side readiness, externally reachable readiness, and exact release identity passed verification. The lifecycle journal is {operationResult.operation.journal.phase}. Open <a href={`http://${planResult?.configuration.host}:8080`} target="_blank" rel="noreferrer">http://{planResult?.configuration.host}:8080</a>.</p></div>}
+        {operationResult && operationKind === "remote-install" && <div className="inline-result success"><strong>Remote Linux evaluation installation committed</strong><p>The transferred files, target-side ownership marker, Docker labels, immutable image, private-network binding, target-side readiness, externally reachable readiness, and exact release identity passed verification. The lifecycle journal is {operationResult.operation.journal.phase}. Open <a href={`http://${planResult?.configuration.host}:8080`} target="_blank" rel="noreferrer">http://{planResult?.configuration.host}:8080</a>.</p>{planResult?.configuration.demoMode === "false" && remoteSetupToken && <p><strong>Initial setup token:</strong> <code>{remoteSetupToken}</code><br /><small>Enter this token in RepoWrangler. It stays only in this Ranch Hand window and the remote server's protected deployment environment; setup access closes permanently after the first verified administrator signs in.</small></p>}</div>}
       </section>}
       <section className="grid" aria-label="Initial deployment targets">
         {[

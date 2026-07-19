@@ -257,16 +257,16 @@ func TestRemoteEvaluationInstallTransfersVerifiedBundleAndChecksIdentity(t *test
 	}
 }
 
-func TestWSLRealModeGeneratesRequiredSetupSecrets(t *testing.T) {
+func TestRemoteRealModeGeneratesRequiredSetupSecrets(t *testing.T) {
 	host := newFakeRemoteHost()
 	adapter := newRemoteLinuxCompose(func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error) { return host, nil })
 	candidate := remoteEvaluationPlan()
 	candidate.Configuration["demoMode"] = "false"
-	if err := adapter.Apply(context.Background(), lifecycle.Install, candidate, "", stagedRemoteBundle(t), lifecycle.OperationBackups{}, Credentials{SSHPassword: "runtime-only"}); err != nil {
+	if err := adapter.Apply(context.Background(), lifecycle.Install, candidate, "", stagedRemoteBundle(t), lifecycle.OperationBackups{}, Credentials{SSHPassword: "runtime-only", SetupToken: "abcdefghijklmnopqrstuvwxyz012345"}); err != nil {
 		t.Fatal(err)
 	}
 	environment := string(host.files[".env"])
-	for _, expected := range []string{"DEMO_MODE=false", "BIND_ADDRESS=0.0.0.0", "PUBLIC_BASE_URL=http://192.168.1.165:8080", "SESSION_SECRET=", "SECRET_ENCRYPTION_KEY="} {
+	for _, expected := range []string{"DEMO_MODE=false", "BIND_ADDRESS=0.0.0.0", "PUBLIC_BASE_URL=http://192.168.1.165:8080", "SESSION_SECRET=", "SECRET_ENCRYPTION_KEY=", "SETUP_TOKEN=abcdefghijklmnopqrstuvwxyz012345"} {
 		if !strings.Contains(environment, expected) {
 			t.Fatalf("real mode environment is missing %s", expected)
 		}
@@ -276,11 +276,25 @@ func TestWSLRealModeGeneratesRequiredSetupSecrets(t *testing.T) {
 	}
 }
 
+func TestRemoteRealModeRefusesUnprotectedInitialSetup(t *testing.T) {
+	host := newFakeRemoteHost()
+	adapter := newRemoteLinuxCompose(func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error) { return host, nil })
+	candidate := remoteEvaluationPlan()
+	candidate.Configuration["demoMode"] = "false"
+	err := adapter.Apply(context.Background(), lifecycle.Install, candidate, "", stagedRemoteBundle(t), lifecycle.OperationBackups{}, Credentials{SSHPassword: "runtime-only"})
+	if err == nil || !strings.Contains(err.Error(), "setup token") {
+		t.Fatalf("expected real remote install without setup protection to fail, got %v", err)
+	}
+	if len(host.files) != 0 {
+		t.Fatal("remote install mutated the target before rejecting the missing setup token")
+	}
+}
+
 func TestWSLEnvironmentRemainsLoopbackOnly(t *testing.T) {
 	candidate := remoteEvaluationPlan()
 	candidate.Target.Kind = "local-wsl-compose"
 	candidate.Configuration = map[string]string{"distribution": "Ubuntu-26.04", "projectName": "repo-wrangler", "demoMode": "false"}
-	environment, err := remoteEnvironment(candidate)
+	environment, err := remoteEnvironment(candidate, Credentials{})
 	if err != nil {
 		t.Fatal(err)
 	}

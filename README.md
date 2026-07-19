@@ -77,8 +77,8 @@ and credential-encryption secrets, and opens the first-run provider setup flow.
 On intentionally selects the mock-data evaluation profile. Ranch Hand never
 stores the generated secrets in the exported plan, catalog, or diagnostics.
 
-For RepoWrangler v1.0.12, Ranch Hand downloads the public image archive from
-the immutable RepoWrangler release, verifies the archive's byte
+Ranch Hand downloads the public image archive from the selected immutable
+RepoWrangler release, verifies the archive's byte
 count and SHA-256 trust record, caches it under the current Windows user, and
 streams it directly into the selected WSL Docker Engine. Compose uses only that
 loaded image with `pull_policy: never`; the WSL install does not contact GHCR
@@ -136,6 +136,13 @@ Failed-install recovery deletes the Worker only when its D1 binding and version 
 The first remote Linux mutator uses Ranch Hand's native SSH client; Windows does not need OpenSSH, WSL, Docker, Compose, or a Linux shell. If Engine or Compose is missing on Ubuntu/Debian, Ranch Hand offers an explicit sudo-backed prerequisite installer, starts Docker, grants the selected account Docker access, and reruns preflight. Other distributions receive a bounded unsupported-platform error without package changes. The normal path retrieves the public host fingerprint before authentication and lets the user trust that first-seen key; advanced options permit manual entry and out-of-band comparison with an Azure/server console or administrator. Authentication then presents a single password field by default or private-key fields when explicitly selected. A successful credential remains only in the running loopback session through installation and is never written to the plan or disk. Live preflight verifies the pinned identity, Linux Docker Engine and Compose, unused project, and dedicated installation directory.
 
 Apply transfers the verified digest-pinned Compose file plus a generated evaluation-only override and `.env`. The override gives the server container and data volume stable names and exact Ranch Hand ownership/deployment/version labels. A secret-free marker records the release, artifact, immutable image, resource names, and SHA-256 of every transferred deployment file. For Remote Linux evaluation, Ranch Hand accepts only an explicit private IPv4 target, publishes port `8080` on that server, and reports `http://<private-ip>:8080`. It verifies the marker, file hashes, labels, image, running state, target-side readiness, externally reachable readiness from the Windows control workstation, and exact release identity before committing. Local WSL remains bound only to Windows loopback.
+
+For a real-mode Remote Linux install, Ranch Hand also generates a one-time
+initial setup token in memory, writes it only to the target's mode-0600 `.env`,
+and displays it in the committed result. RepoWrangler asks for identity before
+estate access and closes setup only after the first allowlisted administrator
+successfully signs in. GitHub uses scheduled/manual synchronization when the
+deployment is loopback or private and therefore cannot receive public webhooks.
 
 Ranch Hand downloads the public RepoWrangler image archive to the Windows
 control workstation, verifies its declared size and SHA-256, streams it directly

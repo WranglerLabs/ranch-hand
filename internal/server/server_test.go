@@ -152,6 +152,14 @@ func (f *fakeReleaseVerifier) Discover(_ context.Context, channel, target string
 	}, nil
 }
 
+func (f *fakeReleaseVerifier) List(_ context.Context, target string) ([]productrelease.DiscoveredRelease, error) {
+	f.discoveryTarget = target
+	return []productrelease.DiscoveredRelease{
+		{Version: "v1.0.17", ManifestURL: "https://github.com/WranglerLabs/repo-wrangler/releases/download/v1.0.17/release-manifest.json"},
+		{Version: "v1.1.0-rc.1", ManifestURL: "https://github.com/WranglerLabs/repo-wrangler/releases/download/v1.1.0-rc.1/release-manifest.json", Prerelease: true},
+	}, nil
+}
+
 func TestCreateExportPreflightAndDryRunVerifiedPlan(t *testing.T) {
 	artifact := t.TempDir() + string(os.PathSeparator) + "bundle.tar.gz"
 	if err := os.WriteFile(artifact, []byte("bundle"), 0o600); err != nil {
@@ -277,6 +285,21 @@ func TestRecommendsLatestCompatibleRelease(t *testing.T) {
 	}
 	if verifier.discoveryChannel != "stable" || verifier.discoveryTarget != "local-compose" {
 		t.Fatalf("unexpected discovery request: %s / %s", verifier.discoveryChannel, verifier.discoveryTarget)
+	}
+}
+
+func TestListsCompatibleReleases(t *testing.T) {
+	verifier := &fakeReleaseVerifier{}
+	h := NewWithReleaseVerifier("secret-token", "test", testUI(), verifier)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/releases?target=local-wsl-compose", nil)
+	request.Header.Set("Authorization", "Bearer secret-token")
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"version":"v1.0.17"`) || !strings.Contains(response.Body.String(), `"prerelease":true`) {
+		t.Fatalf("release catalog returned %d: %s", response.Code, response.Body.String())
+	}
+	if verifier.discoveryTarget != "local-wsl-compose" {
+		t.Fatalf("unexpected release catalog target: %s", verifier.discoveryTarget)
 	}
 }
 

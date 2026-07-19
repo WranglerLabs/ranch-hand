@@ -40,6 +40,10 @@ type releaseDiscoverer interface {
 	Discover(context.Context, string, string) (productrelease.DiscoveredRelease, error)
 }
 
+type releaseLister interface {
+	List(context.Context, string) ([]productrelease.DiscoveredRelease, error)
+}
+
 type targetPreflighter interface {
 	Preflight(context.Context, plan.DeploymentPlan, adapter.Credentials) adapter.Report
 }
@@ -80,6 +84,7 @@ type Server struct {
 	ui                fs.FS
 	releaseVerifier   releaseVerifier
 	releaseDiscoverer releaseDiscoverer
+	releaseLister     releaseLister
 	verifiedMu        sync.RWMutex
 	verified          map[string]productrelease.VerifiedArtifact
 	targets           targetPreflighter
@@ -127,9 +132,10 @@ func NewWithDependencies(token, version string, ui fs.FS, verifier releaseVerifi
 
 func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, targets targetPreflighter, stager bundleStager, coordinator operationRunner, installations installationReader, rollbackPool rollbackPoolManager) http.Handler {
 	discoverer, _ := verifier.(releaseDiscoverer)
+	lister, _ := verifier.(releaseLister)
 	cleaner, _ := targets.(targetRemnantCleaner)
 	prerequisites, _ := targets.(targetPrerequisiteInstaller)
-	s := &Server{token: token, version: version, ui: ui, releaseVerifier: verifier, releaseDiscoverer: discoverer, verified: make(map[string]productrelease.VerifiedArtifact), targets: targets, remnantCleaner: cleaner, prerequisites: prerequisites, stager: stager, coordinator: coordinator, installations: installations, rollbackPool: rollbackPool, readyPlans: make(map[string]bool)}
+	s := &Server{token: token, version: version, ui: ui, releaseVerifier: verifier, releaseDiscoverer: discoverer, releaseLister: lister, verified: make(map[string]productrelease.VerifiedArtifact), targets: targets, remnantCleaner: cleaner, prerequisites: prerequisites, stager: stager, coordinator: coordinator, installations: installations, rollbackPool: rollbackPool, readyPlans: make(map[string]bool)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", s.live)
 	mux.Handle("GET /api/v1/status", s.authorize(http.HandlerFunc(s.status)))
@@ -154,6 +160,7 @@ func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, 
 	mux.Handle("POST /api/v1/installations/{deploymentID}/rollback-pool/prune", s.authorize(http.HandlerFunc(s.pruneRollbackPool)))
 	mux.Handle("GET /api/v1/diagnostics", s.authorize(http.HandlerFunc(s.exportDiagnostics)))
 	mux.Handle("POST /api/v1/releases/verify", s.authorize(http.HandlerFunc(s.verifyRelease)))
+	mux.Handle("GET /api/v1/releases", s.authorize(http.HandlerFunc(s.listReleases)))
 	mux.Handle("GET /api/v1/releases/recommended", s.authorize(http.HandlerFunc(s.recommendedRelease)))
 	mux.Handle("/", s.spa())
 	return s.securityHeaders(mux)
@@ -256,6 +263,19 @@ func (s *Server) recommendedRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"release": discovered})
+}
+
+func (s *Server) listReleases(w http.ResponseWriter, r *http.Request) {
+	if s.releaseLister == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "release catalog is unavailable"})
+		return
+	}
+	releases, err := s.releaseLister.List(r.Context(), r.URL.Query().Get("target"))
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"releases": releases})
 }
 
 func (s *Server) listActiveOperations(w http.ResponseWriter, _ *http.Request) {

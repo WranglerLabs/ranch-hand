@@ -181,7 +181,7 @@ func (a *WSLCompose) Apply(ctx context.Context, kind lifecycle.OperationKind, ca
 	if err != nil {
 		return err
 	}
-	runtimeImage, err := prepareWSLCompanion(ctx, candidate.Configuration["distribution"], identity.Image)
+	runtimeImage, err := prepareWSLCompanion(ctx, candidate.Configuration["distribution"], identity.Image, candidate.Release.Version, staged.ProvenancePath)
 	if err != nil {
 		return fmt.Errorf("prepare verified public WSL image: %w", err)
 	}

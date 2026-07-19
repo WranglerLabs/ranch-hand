@@ -1,18 +1,33 @@
 package adapter
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
+
+	productrelease "github.com/WranglerLabs/ranch-hand/internal/release"
 )
+
+const (
+	maxPublishedImageArchive = int64(4 << 30)
+	maxPublishedProvenance   = int64(8 << 20)
+	maxArchiveMetadata       = int64(16 << 20)
+)
+
+var publishedRepoWranglerImage = regexp.MustCompile(`^ghcr\.io/wranglerlabs/repo-wrangler-server@sha256:[a-f0-9]{64}$`)
+var archiveDigest = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 type companionImage struct {
 	image        string
@@ -211,6 +226,232 @@ func cacheCompanionImage(ctx context.Context, companion companionImage, client *
 	return destination, nil
 }
 
+// resolveCompanionArchive retains the explicit trust records required by old
+// releases, but new releases are no longer coupled to the Ranch Hand build.
+// Their independently published image archive is accepted only after its
+// digest verifies against the release's Sigstore provenance and its Docker
+// archive identity matches the selected immutable version.
+func resolveCompanionArchive(ctx context.Context, image, version, provenancePath string, client *http.Client, root string) (companionImage, string, error) {
+	if companion, err := companionForImage(image); err == nil {
+		archive, cacheErr := cacheCompanionImage(ctx, companion, client, root)
+		return companion, archive, cacheErr
+	}
+	if productrelease.ValidateVersion(version) != nil || !publishedRepoWranglerImage.MatchString(image) {
+		return companionImage{}, "", errors.New("release image identity is not a supported immutable RepoWrangler image")
+	}
+	provenance, err := readCompanionFile(provenancePath, maxPublishedProvenance)
+	if err != nil {
+		return companionImage{}, "", fmt.Errorf("read verified release provenance: %w", err)
+	}
+	filename := "repo-wrangler-" + version + "-linux-amd64-image.tar.gz"
+	url := "https://github.com/WranglerLabs/repo-wrangler/releases/download/" + version + "/" + filename
+	directory := filepath.Join(root, "images", "releases", version)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return companionImage{}, "", fmt.Errorf("create published image cache: %w", err)
+	}
+	destination := filepath.Join(directory, filename)
+	verifier, err := productrelease.NewSigstoreProvenanceVerifier(root)
+	if err != nil {
+		return companionImage{}, "", err
+	}
+	if companion, err := verifyPublishedImageArchive(destination, image, version, url, provenance, verifier); err == nil {
+		return companion, destination, nil
+	}
+	_ = os.Remove(destination)
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return companionImage{}, "", err
+	}
+	request.Header.Set("Accept", "application/octet-stream")
+	response, err := trustedPublishedImageClient(client).Do(request)
+	if err != nil {
+		return companionImage{}, "", fmt.Errorf("download published release image archive: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return companionImage{}, "", fmt.Errorf("download published release image archive: release host returned HTTP %d", response.StatusCode)
+	}
+	temporary, err := os.CreateTemp(directory, ".published-image-*.partial")
+	if err != nil {
+		return companionImage{}, "", err
+	}
+	temporaryPath := temporary.Name()
+	committed := false
+	defer func() {
+		_ = temporary.Close()
+		if !committed {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	written, err := io.Copy(temporary, io.LimitReader(response.Body, maxPublishedImageArchive+1))
+	if err != nil {
+		return companionImage{}, "", fmt.Errorf("cache published release image archive: %w", err)
+	}
+	if written < 1 || written > maxPublishedImageArchive {
+		return companionImage{}, "", errors.New("published release image archive exceeds the safety limit")
+	}
+	if err := temporary.Sync(); err != nil {
+		return companionImage{}, "", err
+	}
+	if err := temporary.Close(); err != nil {
+		return companionImage{}, "", err
+	}
+	companion, err := verifyPublishedImageArchive(temporaryPath, image, version, url, provenance, verifier)
+	if err != nil {
+		return companionImage{}, "", err
+	}
+	if err := os.Rename(temporaryPath, destination); err != nil {
+		return companionImage{}, "", fmt.Errorf("commit published release image archive: %w", err)
+	}
+	committed = true
+	return companion, destination, nil
+}
+
+func trustedPublishedImageClient(client *http.Client) *http.Client {
+	copyClient := *client
+	previous := client.CheckRedirect
+	copyClient.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if len(via) >= 5 || request.URL.Scheme != "https" {
+			return errors.New("untrusted published image redirect")
+		}
+		host := strings.ToLower(request.URL.Hostname())
+		if host != "github.com" && host != "objects.githubusercontent.com" && host != "release-assets.githubusercontent.com" {
+			return errors.New("untrusted published image redirect")
+		}
+		if previous != nil {
+			return previous(request, via)
+		}
+		return nil
+	}
+	return &copyClient
+}
+
+func readCompanionFile(path string, maximum int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	contents, err := io.ReadAll(io.LimitReader(file, maximum+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(contents)) > maximum {
+		return nil, errors.New("file exceeds the safety limit")
+	}
+	return contents, nil
+}
+
+func verifyPublishedImageArchive(path, image, version, url string, provenance []byte, verifier productrelease.ProvenanceVerifier) (companionImage, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return companionImage{}, err
+	}
+	info, err := file.Stat()
+	if err != nil || info.Size() < 1 || info.Size() > maxPublishedImageArchive {
+		_ = file.Close()
+		return companionImage{}, errors.New("published image archive size is invalid")
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		_ = file.Close()
+		return companionImage{}, err
+	}
+	_ = file.Close()
+	digest := hex.EncodeToString(hash.Sum(nil))
+	if err := verifier.Verify(provenance, digest); err != nil {
+		return companionImage{}, fmt.Errorf("verify published image archive provenance: %w", err)
+	}
+	runtimeImage, imageIDs, err := inspectPublishedImageArchive(path, version)
+	if err != nil {
+		return companionImage{}, err
+	}
+	return companionImage{image: image, runtimeImage: runtimeImage, imageID: imageIDs[0], imageIDs: imageIDs, url: url, sha256: digest, size: info.Size()}, nil
+}
+
+func inspectPublishedImageArchive(archivePath, version string) (string, []string, error) {
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return "", nil, err
+	}
+	defer file.Close()
+	gzipReader, err := gzip.NewReader(file)
+	if err != nil {
+		return "", nil, fmt.Errorf("open published image gzip: %w", err)
+	}
+	defer gzipReader.Close()
+	tarReader := tar.NewReader(gzipReader)
+	metadata := make(map[string][]byte)
+	var metadataSize int64
+	for {
+		header, nextErr := tarReader.Next()
+		if errors.Is(nextErr, io.EOF) {
+			break
+		}
+		if nextErr != nil {
+			return "", nil, fmt.Errorf("read published image archive: %w", nextErr)
+		}
+		if header.Typeflag != tar.TypeReg || (header.Name != "manifest.json" && !strings.HasPrefix(filepath.ToSlash(header.Name), "blobs/sha256/")) || header.Size < 1 || header.Size > 4<<20 {
+			continue
+		}
+		metadataSize += header.Size
+		if metadataSize > maxArchiveMetadata {
+			return "", nil, errors.New("published image archive metadata exceeds the safety limit")
+		}
+		contents, readErr := io.ReadAll(io.LimitReader(tarReader, header.Size))
+		if readErr != nil || int64(len(contents)) != header.Size {
+			return "", nil, errors.New("published image archive metadata is truncated")
+		}
+		metadata[filepath.ToSlash(header.Name)] = contents
+	}
+	var manifest []struct {
+		Config   string   `json:"Config"`
+		RepoTags []string `json:"RepoTags"`
+	}
+	if json.Unmarshal(metadata["manifest.json"], &manifest) != nil || len(manifest) != 1 || len(manifest[0].RepoTags) != 1 {
+		return "", nil, errors.New("published image archive manifest is invalid")
+	}
+	runtimeImage := "repo-wrangler-ranch-hand:" + version
+	if manifest[0].RepoTags[0] != runtimeImage {
+		return "", nil, errors.New("published image archive tag does not match the selected release")
+	}
+	configPath := filepath.ToSlash(manifest[0].Config)
+	configDigest := filepath.Base(configPath)
+	if !archiveDigest.MatchString(configDigest) {
+		return "", nil, errors.New("published image archive config identity is invalid")
+	}
+	config, ok := metadata[configPath]
+	if !ok {
+		return "", nil, errors.New("published image archive config is missing")
+	}
+	actualConfigDigest := sha256.Sum256(config)
+	if hex.EncodeToString(actualConfigDigest[:]) != configDigest {
+		return "", nil, errors.New("published image archive config digest does not match its content")
+	}
+	imageIDs := []string{"sha256:" + configDigest}
+	for path, contents := range metadata {
+		blobDigest := filepath.Base(path)
+		if path == configPath || !strings.HasPrefix(path, "blobs/sha256/") || !archiveDigest.MatchString(blobDigest) {
+			continue
+		}
+		actualBlobDigest := sha256.Sum256(contents)
+		if hex.EncodeToString(actualBlobDigest[:]) != blobDigest {
+			continue
+		}
+		var candidate struct {
+			SchemaVersion int `json:"schemaVersion"`
+			Config        struct {
+				Digest string `json:"digest"`
+			} `json:"config"`
+		}
+		if json.Unmarshal(contents, &candidate) == nil && candidate.SchemaVersion == 2 && candidate.Config.Digest == "sha256:"+configDigest {
+			imageIDs = append(imageIDs, "sha256:"+blobDigest)
+		}
+	}
+	return runtimeImage, imageIDs, nil
+}
+
 func matchesFile(path, expectedHash string, expectedSize int64) bool {
 	file, err := os.Open(path)
 	if err != nil {
@@ -228,17 +469,13 @@ func matchesFile(path, expectedHash string, expectedSize int64) bool {
 	return strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), expectedHash)
 }
 
-func prepareWSLCompanion(ctx context.Context, distribution, image string) (string, error) {
-	companion, err := companionForImage(image)
-	if err != nil {
-		return "", err
-	}
+func prepareWSLCompanion(ctx context.Context, distribution, image, version, provenancePath string) (string, error) {
 	root, err := os.UserCacheDir()
 	if err != nil {
 		return "", fmt.Errorf("locate Ranch Hand image cache: %w", err)
 	}
 	client := &http.Client{Timeout: 30 * time.Minute}
-	archive, err := cacheCompanionImage(ctx, companion, client, filepath.Join(root, "WranglerLabs", "Ranch Hand"))
+	companion, archive, err := resolveCompanionArchive(ctx, image, version, provenancePath, client, filepath.Join(root, "WranglerLabs", "Ranch Hand"))
 	if err != nil {
 		return "", err
 	}

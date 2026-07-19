@@ -18,16 +18,12 @@ import (
 // the pinned SSH connection, and confirms Docker loaded the expected immutable
 // image ID. The target never needs registry credentials or direct registry
 // access.
-func (a *RemoteLinuxCompose) prepareRemoteCompanion(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials, image string) (string, error) {
-	companion, err := companionForImage(image)
-	if err != nil {
-		return "", err
-	}
+func (a *RemoteLinuxCompose) prepareRemoteCompanion(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials, image, provenancePath string) (string, error) {
 	root, err := os.UserCacheDir()
 	if err != nil {
 		return "", fmt.Errorf("locate Ranch Hand image cache: %w", err)
 	}
-	archive, err := cacheCompanionImage(ctx, companion, &http.Client{Timeout: 30 * time.Minute}, filepath.Join(root, "WranglerLabs", "Ranch Hand"))
+	companion, archive, err := resolveCompanionArchive(ctx, image, candidate.Release.Version, provenancePath, &http.Client{Timeout: 30 * time.Minute}, filepath.Join(root, "WranglerLabs", "Ranch Hand"))
 	if err != nil {
 		return "", err
 	}

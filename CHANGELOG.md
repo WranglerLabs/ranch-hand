@@ -6,6 +6,13 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.27] - 2026-07-19
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
 - Docker Desktop installation and replacement now load the release's verified
   public image archive through the native Docker Engine API and verify its
   immutable image ID, removing the erroneous dependency on anonymous GHCR
@@ -13,8 +20,6 @@ generally available or production-supported releases.
 - Azure staged preflight now proves that the exact digest-pinned release image
   is anonymously pullable and content-matches its digest before Ranch Hand can
   create a resource group.
-
-### Fixed
 
 - WSL real-mode installation no longer inherits the Remote Linux requirement
   for a generated setup token when the WSL plan is normalized through the
@@ -26,6 +31,17 @@ generally available or production-supported releases.
   Linux Compose, Azure Container Apps, and Cloudflare Worker plus D1. Every
   adapter verifies its exact ownership evidence before deleting persistent
   data, and remote or cloud credentials remain in memory only.
+
+### Verification
+
+- A clean real-mode WSL installation with empty credentials applied, passed
+  readiness and exact-version checks, and committed without the Remote Linux
+  setup-token error present in RC26.
+- The deployed first-run API reported no selected identity, the loopback GitHub
+  App manifest omitted webhook fields, and managed uninstall left zero project
+  containers and zero project volumes.
+- Windows validation, Linux Go test/vet, public product-artifact smoke, and both
+  CodeQL analyses passed for the corrected source.
 
 ## [0.1.0-rc.26] - 2026-07-19
 

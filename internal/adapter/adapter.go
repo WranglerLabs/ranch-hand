@@ -15,6 +15,7 @@ type Credentials struct {
 	SSHPrivateKeyPassphrase string `json:"sshPrivateKeyPassphrase,omitempty"`
 	SSHPassword             string `json:"sshPassword,omitempty"`
 	SudoPassword            string `json:"sudoPassword,omitempty"`
+	SetupToken              string `json:"setupToken,omitempty"`
 }
 
 func (c *Credentials) Clear() {
@@ -24,6 +25,7 @@ func (c *Credentials) Clear() {
 	c.SSHPrivateKeyPassphrase = ""
 	c.SSHPassword = ""
 	c.SudoPassword = ""
+	c.SetupToken = ""
 }
 
 func (c Credentials) Validate() error {
@@ -35,6 +37,9 @@ func (c Credentials) Validate() error {
 	}
 	if len(c.SSHPrivateKeyPassphrase) > 8<<10 || len(c.SSHPassword) > 8<<10 || len(c.SudoPassword) > 8<<10 {
 		return errors.New("SSH passphrase or password exceeds the 8 KiB safety limit")
+	}
+	if len(c.SetupToken) > 512 {
+		return errors.New("setup token exceeds the 512-byte safety limit")
 	}
 	return nil
 }

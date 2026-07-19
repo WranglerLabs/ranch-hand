@@ -26,6 +26,7 @@ const remoteMarkerName = ".ranch-hand-installation.json"
 
 var remoteDigestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var remoteScriptPattern = regexp.MustCompile(`(?i)<script[^>]+src=["']([^"']+\.js)["']`)
+var remoteSetupTokenPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{32,256}$`)
 
 var (
 	errComposeInstallDirectoryExists = errors.New("refusing to replace a pre-existing Compose installation directory")
@@ -64,6 +65,9 @@ func (a *RemoteLinuxCompose) Apply(ctx context.Context, kind lifecycle.Operation
 	if staged.Target != "remote-linux-compose" {
 		return errors.New("remote Linux adapter requires a remote-linux-compose bundle")
 	}
+	if err := validateRemoteSetupToken(candidate, credentials); err != nil {
+		return err
+	}
 	identity, err := bundle.ReadIdentity(staged)
 	if err != nil {
 		return err
@@ -92,7 +96,7 @@ func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.Operation
 	if staged.Target != "remote-linux-compose" {
 		return errors.New("remote Linux adapter requires a remote-linux-compose bundle")
 	}
-	environment, err := remoteEnvironment(candidate)
+	environment, err := remoteEnvironment(candidate, credentials)
 	if err != nil {
 		return err
 	}
@@ -198,7 +202,7 @@ volumes:
 `, imageOverride, containerName, deploymentID, version, volumeName, deploymentID, version)
 }
 
-func remoteEnvironment(candidate plan.DeploymentPlan) ([]byte, error) {
+func remoteEnvironment(candidate plan.DeploymentPlan, credentials Credentials) ([]byte, error) {
 	version := candidate.Release.Version
 	demoMode := candidate.Configuration["demoMode"]
 	if demoMode == "" {
@@ -223,7 +227,21 @@ func remoteEnvironment(candidate plan.DeploymentPlan) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate RepoWrangler encryption key: %w", err)
 	}
-	return []byte(base + "SESSION_SECRET=" + sessionSecret + "\nSECRET_ENCRYPTION_KEY=" + encryptionKey + "\n"), nil
+	secrets := base + "SESSION_SECRET=" + sessionSecret + "\nSECRET_ENCRYPTION_KEY=" + encryptionKey + "\n"
+	if candidate.Target.Kind == "remote-linux-compose" && candidate.Configuration["demoMode"] == "false" {
+		if err := validateRemoteSetupToken(candidate, credentials); err != nil {
+			return nil, err
+		}
+		secrets += "SETUP_TOKEN=" + credentials.SetupToken + "\n"
+	}
+	return []byte(secrets), nil
+}
+
+func validateRemoteSetupToken(candidate plan.DeploymentPlan, credentials Credentials) error {
+	if candidate.Target.Kind == "remote-linux-compose" && candidate.Configuration["demoMode"] == "false" && !remoteSetupTokenPattern.MatchString(credentials.SetupToken) {
+		return errors.New("remote real-mode installation requires a generated 32-256 character setup token")
+	}
+	return nil
 }
 
 func randomEnvironmentSecret() (string, error) {

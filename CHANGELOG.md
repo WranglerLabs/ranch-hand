@@ -6,6 +6,37 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.26] - 2026-07-19
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- Ranch Hand selects RepoWrangler v1.0.16, whose local and private-network
+  GitHub App manifests omit webhook fields that GitHub rejects when the URL is
+  not publicly reachable over HTTPS.
+- Fresh real-mode deployments choose GitHub or Microsoft Entra ID
+  administrator identity before connecting repositories. Setup remains open
+  until the first verified allowlisted administrator sign-in.
+- Remote real-mode deployments receive a one-time setup token that is shown
+  only in the active Ranch Hand result and retained only in the remote
+  deployment's protected runtime environment.
+- Remote installation results show the exact private-LAN URL to open, and the
+  operator and uninstall documentation now covers every supported target.
+- The v1.0.16 offline trust record pins the registry index, archive manifest,
+  image config, archive SHA-256, and exact byte size.
+
+### Verification
+
+- RepoWrangler v1.0.16 passed audit, typecheck, 230 unit tests, 11 release
+  contract tests, CodeQL, built-server first-run smoke, container first-run
+  smoke, and immutable bundle assembly before publication.
+- Ranch Hand CI downloads the public v1.0.16 artifacts, verifies their exact
+  hashes and identities, loads the offline image, starts the verified Compose
+  deployment, and exercises health, version, identity setup, and loopback
+  GitHub App manifest behavior.
+
 ## [0.1.0-rc.25] - 2026-07-18
 
 **Classification: Public Preview.** Publicly downloadable and intended for

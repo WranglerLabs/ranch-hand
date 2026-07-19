@@ -374,7 +374,7 @@ func TestWSLStyleInstallUsesVerifiedLoadedImageWithoutRegistryPull(t *testing.T)
 		t.Fatalf("loaded image was not fixed in the Compose override: %s", override)
 	}
 	marker := host.marker()
-	if marker.SchemaVersion != "1.1" || marker.RuntimeImage != repoWranglerV1010Companion.runtimeImage {
+	if marker.SchemaVersion != "1.2" || marker.RuntimeImage != repoWranglerV1010Companion.runtimeImage || marker.RuntimeImageID != repoWranglerV1010Companion.imageID {
 		t.Fatalf("loaded image identity was not recorded: %+v", marker)
 	}
 	if err := adapter.Verify(context.Background(), candidate, Credentials{}); err != nil {

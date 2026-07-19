@@ -122,6 +122,10 @@ func TestDiscoversNewestCompatibleStableRelease(t *testing.T) {
 			_ = json.NewEncoder(response).Encode(Manifest{SchemaVersion: SchemaVersion, Product: Product, Version: "v1.0.10", ReleasedAt: "2026-07-17T12:00:00Z", Artifacts: []Artifact{{
 				Target: "local-compose", URL: server.URL + "/v1.0.10/bundle.tar.gz", SHA256: strings.Repeat("a", 64), Size: 42,
 			}}})
+		case "/v1.0.11-rc.1/release-manifest.json":
+			_ = json.NewEncoder(response).Encode(Manifest{SchemaVersion: SchemaVersion, Product: Product, Version: "v1.0.11-rc.1", ReleasedAt: "2026-07-18T12:00:00Z", Artifacts: []Artifact{{
+				Target: "local-compose", URL: server.URL + "/v1.0.11-rc.1/bundle.tar.gz", SHA256: strings.Repeat("b", 64), Size: 43,
+			}}})
 		default:
 			http.NotFound(response, request)
 		}
@@ -141,6 +145,13 @@ func TestDiscoversNewestCompatibleStableRelease(t *testing.T) {
 	}
 	if discovered.Version != "v1.0.10" || discovered.Prerelease || discovered.ManifestURL != server.URL+"/v1.0.10/release-manifest.json" {
 		t.Fatalf("unexpected discovery result: %+v", discovered)
+	}
+	available, err := service.List(context.Background(), "local-compose")
+	if err != nil {
+		t.Fatalf("list releases: %v", err)
+	}
+	if len(available) != 2 || available[0].Version != "v1.0.11-rc.1" || !available[0].Prerelease || available[1].Version != "v1.0.10" || available[1].Prerelease {
+		t.Fatalf("unexpected release catalog: %+v", available)
 	}
 }
 

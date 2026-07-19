@@ -149,6 +149,7 @@ function App() {
   const [version, setVersion] = useState("");
   const [releaseChoice, setReleaseChoice] = useState<"stable" | "prerelease" | "specific">("stable");
   const [releaseLoading, setReleaseLoading] = useState(false);
+  const [releaseCatalog, setReleaseCatalog] = useState<DiscoveredRelease[]>([]);
   const [target, setTarget] = useState("azure-container-apps");
   const [releaseError, setReleaseError] = useState("");
   const [verifying, setVerifying] = useState(false);
@@ -249,18 +250,33 @@ function App() {
     refreshInstallations();
   }, []);
 
-  useEffect(() => {
-    if (!token || releaseChoice === "specific") return;
-    let cancelled = false;
+  async function refreshReleaseCatalog() {
+    if (!token) return;
     setReleaseLoading(true);
     setReleaseError("");
-    setVersion("");
-    api<{ release: DiscoveredRelease }>(`/api/v1/releases/recommended?channel=${releaseChoice}&target=${encodeURIComponent(target)}`)
-      .then(({ release }) => { if (!cancelled) setVersion(release.version); })
-      .catch((reason: Error) => { if (!cancelled) setReleaseError(reason.message); })
-      .finally(() => { if (!cancelled) setReleaseLoading(false); });
-    return () => { cancelled = true; };
-  }, [releaseChoice, target]);
+    try {
+      const result = await api<{ releases: DiscoveredRelease[] }>(`/api/v1/releases?target=${encodeURIComponent(target)}`);
+      setReleaseCatalog(result.releases);
+      if (releaseChoice !== "specific") {
+        const selected = result.releases.find((release) => release.prerelease === (releaseChoice === "prerelease"));
+        setVersion(selected?.version || "");
+      }
+    } catch (reason) {
+      setReleaseCatalog([]);
+      if (releaseChoice !== "specific") setVersion("");
+      setReleaseError(reason instanceof Error ? reason.message : "Release catalog refresh failed");
+    } finally {
+      setReleaseLoading(false);
+    }
+  }
+
+  useEffect(() => { void refreshReleaseCatalog(); }, [target]);
+
+  useEffect(() => {
+    if (releaseChoice === "specific") return;
+    const selected = releaseCatalog.find((release) => release.prerelease === (releaseChoice === "prerelease"));
+    setVersion(selected?.version || "");
+  }, [releaseChoice, releaseCatalog]);
 
   useEffect(() => {
     if (target !== "local-wsl-compose" || !token) return;
@@ -844,12 +860,12 @@ function App() {
       <section className="release-panel" aria-labelledby="release-heading">
         <p className="eyebrow">Immutable release</p>
         <h2 id="release-heading">Verify a RepoWrangler bundle</h2>
-        <p>Ranch Hand selects the latest stable RepoWrangler release by default. Choose a prerelease or a specific immutable version only when you intentionally need one. Ranch Hand then verifies the published bundle before use.</p>
+        <p>Ranch Hand fetches the current RepoWrangler release catalog for the selected target. Stable and preview releases remain selectable even when they were published after this Ranch Hand build. Every selected bundle is still verified before use.</p>
         <form onSubmit={verifyRelease}>
           <label>Release choice<select value={releaseChoice} onChange={(event) => { setReleaseChoice(event.target.value as "stable" | "prerelease" | "specific"); setArtifact(null); setPlanResult(null); }}><option value="stable">Latest stable (recommended)</option><option value="prerelease">Latest prerelease</option><option value="specific">Specific version (advanced)</option></select></label>
-          <label>RepoWrangler version<input required readOnly={releaseChoice !== "specific"} pattern="v[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9.-]+)?" placeholder={releaseLoading ? "Finding the latest compatible release…" : "v1.0.10"} value={version} onChange={(event) => setVersion(event.target.value)} /></label>
+          {releaseChoice === "specific" ? <label>RepoWrangler version<input required pattern="v[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9.-]+)?" placeholder="v1.0.17" value={version} onChange={(event) => { setVersion(event.target.value); setArtifact(null); setPlanResult(null); }} /></label> : <label>Available RepoWrangler releases<select required value={version} onChange={(event) => { setVersion(event.target.value); setArtifact(null); setPlanResult(null); }}>{releaseCatalog.filter((release) => release.prerelease === (releaseChoice === "prerelease")).map((release) => <option key={release.version} value={release.version}>{release.version}{release.prerelease ? " — preview" : " — stable"}</option>)}</select></label>}
           <label>Deployment target<select value={target} onChange={(event) => { const next = event.target.value; setTarget(next); setArtifact(null); setPlanResult(null); setConfiguration(targetDefaults[next] || {}); setRuntimeCredentials({}); setTargetReport(null); setStagedBundle(null); setInstallConfirmed(false); setWSLInstallMessage(""); setOperationResult(null); setOperationKind(null); setOperationAzureToken(""); setOperationCloudflareToken(""); setOperationSSHCredentials({}); setRemoteSetupToken(""); }}><option value="local-wsl-compose">Local Docker Compose — WSL</option><option value="local-compose">Local Docker Desktop</option><option value="remote-linux-compose">Remote Linux Docker Compose</option><option value="cloudflare">Cloudflare</option><option value="azure-container-apps">Azure Container Apps</option></select></label>
-          <button type="submit" disabled={verifying || releaseLoading || !version || !token}>{releaseLoading ? "Finding release…" : verifying ? "Verifying and caching…" : "Verify and cache release"}</button>
+          <div className="button-row"><button type="button" className="secondary" disabled={releaseLoading || !token} onClick={refreshReleaseCatalog}>{releaseLoading ? "Fetching releases…" : "Fetch available releases"}</button><button type="submit" disabled={verifying || releaseLoading || !version || !token}>{verifying ? "Verifying and caching…" : "Verify and cache release"}</button></div>
         </form>
         {releaseError && <div className="inline-result error" role="alert"><strong>Release rejected</strong><p>{releaseError}</p></div>}
         {artifact && <div className="inline-result success"><strong>{artifact.cacheHit ? "Verified cached artifact" : "Downloaded and verified artifact"}</strong><dl><div><dt>Release</dt><dd>{artifact.version}</dd></div><div><dt>Target</dt><dd>{artifact.target}</dd></div><div><dt>Provenance</dt><dd>{artifact.provenanceVerified ? "Verified" : "Rejected"}</dd></div><div><dt>SBOM</dt><dd>{artifact.sbomVerified ? "Verified" : "Rejected"}</dd></div><div><dt>Size</dt><dd>{artifact.size.toLocaleString()} bytes</dd></div><div><dt>SHA-256</dt><dd className="digest">{artifact.sha256}</dd></div></dl></div>}

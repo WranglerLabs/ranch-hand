@@ -46,6 +46,17 @@ func TestWSLNormalizationPreservesLegacyPlanIdentityWithoutEmptyDemoField(t *tes
 	if _, present := normalized.Configuration["demoMode"]; present {
 		t.Fatal("legacy WSL plan gained an empty demoMode field and changed identity")
 	}
+	originalID, err := lifecycle.DeploymentID(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalizedID, err := remoteDeploymentID(normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalizedID != originalID {
+		t.Fatalf("normalized WSL transport changed deployment identity: got %s want %s", normalizedID, originalID)
+	}
 }
 
 func TestNormalizedWSLRealModeDoesNotRequireRemoteSetupToken(t *testing.T) {

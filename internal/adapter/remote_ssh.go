@@ -35,7 +35,7 @@ type remoteConnector func(context.Context, plan.DeploymentPlan, Credentials) (re
 
 type RemoteLinuxCompose struct {
 	connect             remoteConnector
-	prepareReleaseImage func(context.Context, plan.DeploymentPlan, Credentials, string) (string, error)
+	prepareReleaseImage func(context.Context, plan.DeploymentPlan, Credentials, string, string) (string, error)
 	verifyRemoteAccess  func(context.Context, plan.DeploymentPlan, string) error
 }
 
@@ -88,7 +88,7 @@ func newRemoteLinuxCompose(connect remoteConnector) *RemoteLinuxCompose {
 	// This constructor is used by the WSL delegate and adapter tests. WSL calls
 	// apply only after loading and verifying its companion image. Tests replace
 	// this resolver when they exercise the real archive-transfer preparation.
-	adapter.prepareReleaseImage = func(_ context.Context, _ plan.DeploymentPlan, _ Credentials, image string) (string, error) {
+	adapter.prepareReleaseImage = func(_ context.Context, _ plan.DeploymentPlan, _ Credentials, image, _ string) (string, error) {
 		companion, err := companionForImage(image)
 		return companion.runtimeImage, err
 	}

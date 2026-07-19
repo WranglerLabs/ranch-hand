@@ -20,11 +20,13 @@ import (
 	"github.com/WranglerLabs/ranch-hand/internal/bundle"
 	"github.com/WranglerLabs/ranch-hand/internal/lifecycle"
 	"github.com/WranglerLabs/ranch-hand/internal/plan"
+	productrelease "github.com/WranglerLabs/ranch-hand/internal/release"
 )
 
 const remoteMarkerName = ".ranch-hand-installation.json"
 
 var remoteDigestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+var remoteImageIDPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 var remoteScriptPattern = regexp.MustCompile(`(?i)<script[^>]+src=["']([^"']+\.js)["']`)
 var remoteSetupTokenPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{32,256}$`)
 
@@ -46,6 +48,7 @@ type remoteInstallation struct {
 	VolumeName        string `json:"volumeName"`
 	Image             string `json:"image"`
 	RuntimeImage      string `json:"runtimeImage,omitempty"`
+	RuntimeImageID    string `json:"runtimeImageId,omitempty"`
 	ComposeSHA256     string `json:"composeSha256"`
 	OverrideSHA256    string `json:"overrideSha256"`
 	EnvironmentSHA256 string `json:"environmentSha256"`
@@ -81,7 +84,7 @@ func (a *RemoteLinuxCompose) Apply(ctx context.Context, kind lifecycle.Operation
 	if a.prepareReleaseImage == nil {
 		return errors.New("remote Linux verified image preparation is unavailable")
 	}
-	runtimeImage, err := a.prepareReleaseImage(ctx, candidate, credentials, identity.Image)
+	runtimeImage, err := a.prepareReleaseImage(ctx, candidate, credentials, identity.Image, staged.ProvenancePath)
 	if err != nil {
 		return fmt.Errorf("prepare verified release image on remote Linux: %w", err)
 	}
@@ -132,9 +135,10 @@ func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.Operation
 	if runtimeImage == "" || runtimeImage == identity.Image {
 		return errors.New("remote Linux requires a separately verified loaded release image")
 	}
-	if output, inspectErr := host.Run(ctx, "docker image inspect --format '{{.Id}}' "+shellQuote(runtimeImage), nil); inspectErr != nil || output == "" {
-		if output != "" {
-			return fmt.Errorf("verify loaded release image before target mutation: %w: %s", inspectErr, boundedCommandFailure(output))
+	loadedRuntimeID, inspectErr := host.Run(ctx, "docker image inspect --format '{{.Id}}' "+shellQuote(runtimeImage), nil)
+	if inspectErr != nil || !remoteImageIDPattern.MatchString(loadedRuntimeID) {
+		if loadedRuntimeID != "" {
+			return fmt.Errorf("verify loaded release image before target mutation: %w: %s", inspectErr, boundedCommandFailure(loadedRuntimeID))
 		}
 		return errors.New("verify loaded release image before target mutation: image is unavailable")
 	}
@@ -149,7 +153,7 @@ func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.Operation
 	if err != nil {
 		return err
 	}
-	deploymentID, err := lifecycle.DeploymentID(candidate)
+	deploymentID, err := remoteDeploymentID(candidate)
 	if err != nil {
 		return err
 	}
@@ -163,8 +167,9 @@ func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.Operation
 		VolumeName: volumeName, Image: identity.Image, ComposeSHA256: bytesSHA256(compose),
 		OverrideSHA256: bytesSHA256(override), EnvironmentSHA256: bytesSHA256(environment),
 	}
-	marker.SchemaVersion = "1.1"
+	marker.SchemaVersion = "1.2"
 	marker.RuntimeImage = runtimeImage
+	marker.RuntimeImageID = loadedRuntimeID
 	markerJSON, err := json.MarshalIndent(marker, "", "  ")
 	if err != nil {
 		return err
@@ -348,20 +353,55 @@ func readRemoteMarker(ctx context.Context, host remoteHost, candidate plan.Deplo
 	if err := decoder.Decode(&marker); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
 		return remoteInstallation{}, errors.New("remote Ranch Hand ownership marker is invalid")
 	}
-	deploymentID, err := lifecycle.DeploymentID(candidate)
+	deploymentID, err := remoteDeploymentID(candidate)
 	if err != nil {
 		return remoteInstallation{}, err
 	}
-	validSchema := (marker.SchemaVersion == "1.0" && marker.RuntimeImage == "") || (marker.SchemaVersion == "1.1" && validLoadedRuntimeImage(marker.Image, marker.RuntimeImage))
+	validSchema := (marker.SchemaVersion == "1.0" && marker.RuntimeImage == "" && marker.RuntimeImageID == "") ||
+		(marker.SchemaVersion == "1.1" && marker.RuntimeImageID == "" && validLoadedRuntimeImage(marker.Image, marker.RuntimeImage, marker.Version)) ||
+		(marker.SchemaVersion == "1.2" && remoteImageIDPattern.MatchString(marker.RuntimeImageID) && validLoadedRuntimeImage(marker.Image, marker.RuntimeImage, marker.Version))
 	if !validSchema || marker.DeploymentID != deploymentID || marker.Version != candidate.Release.Version || marker.ArtifactSHA256 != candidate.Release.ArtifactSHA256 || marker.ProjectName != candidate.Configuration["projectName"] || marker.ContainerName != marker.ProjectName+"-server" || marker.VolumeName != marker.ProjectName+"-data" || !remotePinnedImage(marker.Image) || !remoteDigestPattern.MatchString(marker.ComposeSHA256) || !remoteDigestPattern.MatchString(marker.OverrideSHA256) || !remoteDigestPattern.MatchString(marker.EnvironmentSHA256) {
 		return remoteInstallation{}, errors.New("remote Ranch Hand ownership marker does not match this deployment")
 	}
 	return marker, nil
 }
 
-func validLoadedRuntimeImage(image, runtimeImage string) bool {
+// remoteDeploymentID preserves the public local-WSL plan identity after the
+// WSL adapter translates that plan into the private remote-host shape used by
+// the shared Compose implementation. Ownership markers must match the
+// lifecycle journal created from the public plan, not the adapter's internal
+// transport representation.
+func remoteDeploymentID(candidate plan.DeploymentPlan) (string, error) {
+	if candidate.Target.Kind == "remote-linux-compose" &&
+		candidate.Configuration["user"] == "wsl" &&
+		candidate.Configuration["port"] == "22" &&
+		candidate.Configuration["hostKeySha256"] == "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" {
+		configuration := map[string]string{
+			"distribution": candidate.Configuration["host"],
+			"projectName":  candidate.Configuration["projectName"],
+		}
+		if demoMode, present := candidate.Configuration["demoMode"]; present {
+			configuration["demoMode"] = demoMode
+		}
+		return lifecycle.DeploymentID(plan.DeploymentPlan{
+			SchemaVersion: candidate.SchemaVersion,
+			Name:          candidate.Name,
+			Release:       candidate.Release,
+			Target:        plan.Target{Kind: "local-wsl-compose"},
+			Configuration: configuration,
+		})
+	}
+	return lifecycle.DeploymentID(candidate)
+}
+
+func validLoadedRuntimeImage(image, runtimeImage, version string) bool {
 	companion, err := companionForImage(image)
-	return err == nil && runtimeImage == companion.runtimeImage
+	if err == nil {
+		return runtimeImage == companion.runtimeImage
+	}
+	return publishedRepoWranglerImage.MatchString(image) &&
+		productrelease.ValidateVersion(version) == nil &&
+		runtimeImage == "repo-wrangler-ranch-hand:"+version
 }
 
 func remotePinnedImage(value string) bool {
@@ -397,10 +437,16 @@ func verifyRemoteResources(ctx context.Context, host remoteHost, marker remoteIn
 		return errors.New("remote container does not use the verified immutable image")
 	}
 	if marker.RuntimeImage != "" {
-		companion, companionErr := companionForImage(marker.Image)
 		imageID, imageErr := host.Run(ctx, "docker container inspect --format '{{.Image}}' "+shellQuote(marker.ContainerName), nil)
-		if companionErr != nil || imageErr != nil || !companionLoadedImageMatches(companion, imageID) {
-			return errors.New("remote container runtime image ID does not match the verified immutable image")
+		if marker.RuntimeImageID != "" {
+			if imageErr != nil || imageID != marker.RuntimeImageID {
+				return errors.New("remote container runtime image ID does not match the verified immutable image")
+			}
+		} else {
+			companion, companionErr := companionForImage(marker.Image)
+			if companionErr != nil || imageErr != nil || !companionLoadedImageMatches(companion, imageID) {
+				return errors.New("remote container runtime image ID does not match the verified immutable image")
+			}
 		}
 	}
 	running, err := host.Run(ctx, "docker container inspect --format '{{.State.Running}}' "+shellQuote(marker.ContainerName), nil)

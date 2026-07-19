@@ -139,20 +139,17 @@ func NewServiceWithClient(cacheRoot string, client *http.Client, trustedHosts []
 	return &Service{client: &copyClient, cacheRoot: cacheRoot, trustedHosts: hosts, releaseBase: releaseBase, catalogURL: catalogURL, provenance: provenance}, nil
 }
 
-// Discover returns the newest published release in the requested channel that
-// contains a valid manifest and an artifact for the selected target. Discovery
-// chooses a version; VerifyAndCache still performs the complete immutable
-// manifest, artifact, provenance, and SBOM verification before use.
-func (s *Service) Discover(ctx context.Context, channel, target string) (DiscoveredRelease, error) {
-	if channel != "stable" && channel != "prerelease" {
-		return DiscoveredRelease{}, errors.New("release channel must be stable or prerelease")
-	}
+// List returns every published release in GitHub catalog order that contains a
+// valid manifest and an artifact for the selected target. Listing establishes
+// availability only; VerifyAndCache still performs the complete immutable
+// artifact, provenance, and SBOM verification before use.
+func (s *Service) List(ctx context.Context, target string) ([]DiscoveredRelease, error) {
 	if err := ValidateTarget(target); err != nil {
-		return DiscoveredRelease{}, err
+		return nil, err
 	}
 	contents, err := s.downloadBytes(ctx, s.catalogURL, maxCatalogSize)
 	if err != nil {
-		return DiscoveredRelease{}, fmt.Errorf("download release catalog: %w", err)
+		return nil, fmt.Errorf("download release catalog: %w", err)
 	}
 	var releases []struct {
 		TagName    string `json:"tag_name"`
@@ -164,13 +161,11 @@ func (s *Service) Discover(ctx context.Context, channel, target string) (Discove
 		} `json:"assets"`
 	}
 	if err := json.Unmarshal(contents, &releases); err != nil {
-		return DiscoveredRelease{}, fmt.Errorf("decode release catalog: %w", err)
+		return nil, fmt.Errorf("decode release catalog: %w", err)
 	}
+	result := make([]DiscoveredRelease, 0, len(releases))
 	for _, candidate := range releases {
-		if candidate.Draft || candidate.Prerelease != (channel == "prerelease") || ValidateVersion(candidate.TagName) != nil {
-			continue
-		}
-		if channel == "stable" && strings.Contains(candidate.TagName, "-") {
+		if candidate.Draft || ValidateVersion(candidate.TagName) != nil {
 			continue
 		}
 		expected := s.releaseURL(candidate.TagName, "release-manifest.json")
@@ -197,7 +192,28 @@ func (s *Service) Discover(ctx context.Context, channel, target string) (Discove
 		if _, err := manifest.Artifact(ArtifactTarget(target)); err != nil {
 			continue
 		}
-		return DiscoveredRelease{Version: candidate.TagName, ManifestURL: expected.String(), Prerelease: candidate.Prerelease}, nil
+		result = append(result, DiscoveredRelease{Version: candidate.TagName, ManifestURL: expected.String(), Prerelease: candidate.Prerelease || strings.Contains(candidate.TagName, "-")})
+	}
+	if len(result) == 0 {
+		return nil, fmt.Errorf("no compatible RepoWrangler release is published for target %q", target)
+	}
+	return result, nil
+}
+
+// Discover returns the newest published release in the requested channel that
+// is compatible with the selected target.
+func (s *Service) Discover(ctx context.Context, channel, target string) (DiscoveredRelease, error) {
+	if channel != "stable" && channel != "prerelease" {
+		return DiscoveredRelease{}, errors.New("release channel must be stable or prerelease")
+	}
+	releases, err := s.List(ctx, target)
+	if err != nil {
+		return DiscoveredRelease{}, err
+	}
+	for _, candidate := range releases {
+		if candidate.Prerelease == (channel == "prerelease") {
+			return candidate, nil
+		}
 	}
 	return DiscoveredRelease{}, fmt.Errorf("no compatible %s RepoWrangler release is published for target %q", channel, target)
 }

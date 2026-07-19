@@ -6,6 +6,25 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+### Added
+
+- The release picker now fetches and displays the complete compatible catalog
+  for the selected target, separates stable and preview releases, and provides
+  an explicit **Fetch available releases** action.
+
+### Changed
+
+- WSL and Remote Linux deployments are no longer limited to offline image
+  archives compiled into a particular Ranch Hand release. New RepoWrangler
+  archives are downloaded from the selected immutable release, verified as a
+  subject of its Sigstore provenance, inspected for the exact versioned Docker
+  tag and config digest, and only then loaded into the target engine. Legacy
+  releases retain their existing explicit trust records.
+- WSL ownership markers now preserve the deployment identity of the public WSL
+  plan through the internal remote-Compose transport, and new markers record
+  the exact provenance-derived runtime image ID used for post-install
+  verification and managed recovery.
+
 ## [0.1.0-rc.27] - 2026-07-19
 
 **Classification: Public Preview.** Publicly downloadable and intended for

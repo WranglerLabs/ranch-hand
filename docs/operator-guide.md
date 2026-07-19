@@ -88,9 +88,11 @@ cleared after the operation.
 Use this sequence in the Ranch Hand interface:
 
 1. Under **Verify a RepoWrangler bundle**, leave **Latest stable
-   (recommended)** selected, choose the deployment target, and let Ranch Hand
-   populate the newest compatible RepoWrangler version. Use **Latest
-   prerelease** or **Specific version (advanced)** only intentionally. Choose
+   (recommended)** selected, choose the deployment target, and use **Fetch
+   available releases** whenever you want to reload the live catalog. Ranch
+   Hand lists every compatible stable release for that target; **Latest
+   prerelease** lists the preview channel, and **Specific version (advanced)**
+   accepts an exact immutable tag. Choose
    **Verify and cache release** and continue only when provenance, SBOM, size,
    and SHA-256 all report verified.
 2. Under **Describe the target environment**, enter the requested non-secret

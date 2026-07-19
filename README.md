@@ -50,9 +50,16 @@ Plans must never contain passwords, tokens, private keys, client secrets, or pro
 
 ## Release verification
 
-The local interface discovers and preselects the latest published stable RepoWrangler release that contains an artifact for the chosen target. Operators can intentionally select the latest prerelease or enter a specific immutable version under the advanced choice. Ranch Hand retrieves the official versioned manifest and target bundle over HTTPS, restricts redirects to the trusted GitHub release infrastructure, enforces response-size limits, verifies the declared byte count and SHA-256, and atomically stores the verified bundle in the user's versioned application cache. A matching cached file is hashed again before reuse; partial or mismatched downloads are removed.
+The local interface fetches the current published RepoWrangler catalog for the chosen target, preselects the latest stable release, and lets operators refresh and select any compatible stable or preview release. A specific immutable version remains available under the advanced choice. Release selection is not pinned to the RepoWrangler versions known when Ranch Hand was compiled. Ranch Hand retrieves the official versioned manifest and target bundle over HTTPS, restricts redirects to the trusted GitHub release infrastructure, enforces response-size limits, verifies the declared byte count and SHA-256, and atomically stores the verified bundle in the user's versioned application cache. A matching cached file is hashed again before reuse; partial or mismatched downloads are removed.
 
 Ranch Hand also downloads the release's SPDX SBOM and Sigstore provenance bundle. It verifies the Sigstore trust root through TUF, the certificate and transparency-log evidence, the exact RepoWrangler release-workflow identity, the SLSA provenance predicate, and both the deployment bundle and SBOM digests before classifying the release as verified. This verification is built into Ranch Hand and does not require a GitHub account, GitHub CLI, or Cosign installation.
+
+For WSL and Remote Linux, Ranch Hand also resolves the selected release's
+versioned offline Linux image archive at deployment time. It verifies the
+archive digest against that same signed provenance, derives the Docker config
+identity from the verified archive, and refuses a tag, version, or loaded image
+that does not match. This allows an existing Ranch Hand build to consume later
+compatible RepoWrangler releases without weakening the immutable-image boundary.
 
 ## Deployment plans and dry run
 

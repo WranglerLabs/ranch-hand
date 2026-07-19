@@ -79,10 +79,10 @@ func (a *RemoteLinuxCompose) Apply(ctx context.Context, kind lifecycle.Operation
 	if err != nil {
 		return fmt.Errorf("prepare verified release image on remote Linux: %w", err)
 	}
-	return a.apply(ctx, kind, candidate, staged, backups, credentials, runtimeImage)
+	return a.apply(ctx, kind, candidate, staged, backups, credentials, runtimeImage, true)
 }
 
-func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, staged bundle.StagedBundle, backups lifecycle.OperationBackups, credentials Credentials, runtimeImage string) error {
+func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, staged bundle.StagedBundle, backups lifecycle.OperationBackups, credentials Credentials, runtimeImage string, requireSetupToken bool) error {
 	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return errors.New("the remote Linux Compose adapter currently supports only a new evaluation install")
 	}
@@ -96,7 +96,12 @@ func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.Operation
 	if staged.Target != "remote-linux-compose" {
 		return errors.New("remote Linux adapter requires a remote-linux-compose bundle")
 	}
-	environment, err := remoteEnvironment(candidate, credentials)
+	if requireSetupToken {
+		if err := validateRemoteSetupToken(candidate, credentials); err != nil {
+			return err
+		}
+	}
+	environment, err := remoteEnvironment(candidate, credentials, requireSetupToken)
 	if err != nil {
 		return err
 	}
@@ -202,7 +207,7 @@ volumes:
 `, imageOverride, containerName, deploymentID, version, volumeName, deploymentID, version)
 }
 
-func remoteEnvironment(candidate plan.DeploymentPlan, credentials Credentials) ([]byte, error) {
+func remoteEnvironment(candidate plan.DeploymentPlan, credentials Credentials, requireSetupToken bool) ([]byte, error) {
 	version := candidate.Release.Version
 	demoMode := candidate.Configuration["demoMode"]
 	if demoMode == "" {
@@ -228,7 +233,7 @@ func remoteEnvironment(candidate plan.DeploymentPlan, credentials Credentials) (
 		return nil, fmt.Errorf("generate RepoWrangler encryption key: %w", err)
 	}
 	secrets := base + "SESSION_SECRET=" + sessionSecret + "\nSECRET_ENCRYPTION_KEY=" + encryptionKey + "\n"
-	if candidate.Target.Kind == "remote-linux-compose" && candidate.Configuration["demoMode"] == "false" {
+	if requireSetupToken && candidate.Configuration["demoMode"] == "false" {
 		if err := validateRemoteSetupToken(candidate, credentials); err != nil {
 			return nil, err
 		}

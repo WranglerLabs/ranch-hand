@@ -47,17 +47,16 @@ func stagedComposeBundle(t *testing.T) bundle.StagedBundle {
 	return bundle.StagedBundle{Product: "RepoWrangler", Version: "v1.2.3", Target: "local-compose", Path: directory}
 }
 
+func testPreparedImage(_ context.Context, _ string) (string, error) {
+	return "repo-wrangler-ranch-hand:v1.2.3", nil
+}
+
 func TestLocalDockerInstallUsesEngineAPI(t *testing.T) {
 	var created map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/containers/repo-wrangler-server/json":
 			http.Error(w, "missing", http.StatusNotFound)
-		case r.Method == http.MethodPost && r.URL.Path == "/images/create":
-			if !strings.Contains(r.URL.Query().Get("fromImage"), "@sha256:") {
-				t.Fatal("image pull was not digest-pinned")
-			}
-			_, _ = io.WriteString(w, "{\"status\":\"done\"}\n")
 		case r.Method == http.MethodGet && r.URL.Path == "/volumes/repo-wrangler-data":
 			http.Error(w, "missing", http.StatusNotFound)
 		case r.Method == http.MethodPost && r.URL.Path == "/volumes/create":
@@ -79,13 +78,18 @@ func TestLocalDockerInstallUsesEngineAPI(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	adapter := &LocalDocker{client: server.Client(), baseURL: server.URL}
+	adapter := &LocalDocker{client: server.Client(), baseURL: server.URL, prepareImage: func(_ context.Context, image string) (string, error) {
+		if !strings.Contains(image, "@sha256:") {
+			t.Fatal("verified bundle image was not digest-pinned")
+		}
+		return "repo-wrangler-ranch-hand:v1.2.3", nil
+	}}
 	err := adapter.Apply(context.Background(), lifecycle.Install, localInstallPlan(), "", stagedComposeBundle(t), lifecycle.OperationBackups{}, Credentials{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created["Image"] == "" {
-		t.Fatal("container create request omitted image")
+	if created["Image"] != "repo-wrangler-ranch-hand:v1.2.3" {
+		t.Fatal("container create request did not use the verified archive image")
 	}
 	labels := created["Labels"].(map[string]any)
 	if labels["com.wranglerlabs.ranch-hand.managed"] != "true" {
@@ -339,8 +343,6 @@ func TestLocalDockerUpdateUsesCopyOnWriteVolume(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "old-id", "Config": map[string]any{"Labels": labels}, "State": map[string]any{"Running": true}, "Mounts": []map[string]string{{"Type": "volume", "Name": "old-volume", "Destination": "/app/data"}}})
 		case r.Method == http.MethodGet && r.URL.Path == "/volumes/old-volume":
 			_ = json.NewEncoder(w).Encode(map[string]any{"Labels": labels})
-		case r.Method == http.MethodPost && r.URL.Path == "/images/create":
-			_, _ = io.WriteString(w, "{\"status\":\"done\"}\n")
 		case r.Method == http.MethodGet && r.URL.Path == "/volumes/"+candidateVolume:
 			http.Error(w, "missing", http.StatusNotFound)
 		case r.Method == http.MethodPost && r.URL.Path == "/volumes/create":
@@ -380,7 +382,7 @@ func TestLocalDockerUpdateUsesCopyOnWriteVolume(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	adapter := &LocalDocker{client: server.Client(), baseURL: server.URL, backupRoot: backupRoot}
+	adapter := &LocalDocker{client: server.Client(), baseURL: server.URL, backupRoot: backupRoot, prepareImage: testPreparedImage}
 	if err := adapter.Apply(context.Background(), lifecycle.Update, candidate, "v1.2.2", stagedComposeBundle(t), lifecycle.OperationBackups{Safety: &backup}, Credentials{}); err != nil {
 		t.Fatal(err)
 	}
@@ -421,8 +423,6 @@ func TestLocalDockerRestoreAndRollbackUseSelectedBackupWithFreshSafetyIdentity(t
 					_ = json.NewEncoder(w).Encode(map[string]any{"Id": "current-id", "Config": map[string]any{"Labels": labels}, "State": map[string]any{"Running": true}, "Mounts": []map[string]string{{"Type": "volume", "Name": "current-volume", "Destination": "/app/data"}}})
 				case r.Method == http.MethodGet && r.URL.Path == "/volumes/current-volume":
 					_ = json.NewEncoder(w).Encode(map[string]any{"Labels": labels})
-				case r.Method == http.MethodPost && r.URL.Path == "/images/create":
-					_, _ = io.WriteString(w, "{\"status\":\"done\"}\n")
 				case r.Method == http.MethodGet && r.URL.Path == "/volumes/"+candidateVolume:
 					http.Error(w, "missing", http.StatusNotFound)
 				case r.Method == http.MethodPost && r.URL.Path == "/volumes/create":
@@ -449,7 +449,7 @@ func TestLocalDockerRestoreAndRollbackUseSelectedBackupWithFreshSafetyIdentity(t
 				}
 			}))
 			defer server.Close()
-			adapter := &LocalDocker{client: server.Client(), baseURL: server.URL, backupRoot: backupRoot}
+			adapter := &LocalDocker{client: server.Client(), baseURL: server.URL, backupRoot: backupRoot, prepareImage: testPreparedImage}
 			backups := lifecycle.OperationBackups{Safety: &safety}
 			if test.selected {
 				backups.Selected = &selected

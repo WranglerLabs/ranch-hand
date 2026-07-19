@@ -6,6 +6,11 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+- Docker Desktop installation and replacement now load the release's verified
+  public image archive through the native Docker Engine API and verify its
+  immutable image ID, removing the erroneous dependency on anonymous GHCR
+  access.
+
 ### Fixed
 
 - WSL real-mode installation no longer inherits the Remote Linux requirement

@@ -117,13 +117,14 @@ func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, c
 	if exists {
 		return fmt.Errorf("Docker container %q already exists; Ranch Hand will not replace an unmanaged or unjournaled container", containerName)
 	}
-	if err := d.pullImage(ctx, identity.Image); err != nil {
+	runtimeImage, err := d.prepareLocalCompanion(ctx, identity.Image)
+	if err != nil {
 		return err
 	}
 	if err := d.ensureManagedVolume(ctx, dataVolume, deploymentID); err != nil {
 		return err
 	}
-	_, err = d.createContainer(ctx, candidate, identity.Image, dataVolume, containerName, deploymentID, hostIP, hostPort, true)
+	_, err = d.createContainer(ctx, candidate, runtimeImage, dataVolume, containerName, deploymentID, hostIP, hostPort, true)
 	return err
 }
 
@@ -250,7 +251,8 @@ func (d *LocalDocker) applyReplacement(ctx context.Context, kind lifecycle.Opera
 	if err := d.verifyManagedVolume(ctx, current.DataVolume, deploymentID); err != nil {
 		return err
 	}
-	if err := d.pullImage(ctx, image); err != nil {
+	runtimeImage, err := d.prepareLocalCompanion(ctx, image)
+	if err != nil {
 		return err
 	}
 	candidateVolume := updateVolumeName(deploymentID, safety.BackupID)
@@ -264,7 +266,7 @@ func (d *LocalDocker) applyReplacement(ctx context.Context, kind lifecycle.Opera
 	if err := d.renameContainer(ctx, current.ID, rollbackName); err != nil {
 		return err
 	}
-	createdID, err := d.createContainer(ctx, candidate, image, candidateVolume, containerName, deploymentID, hostIP, hostPort, false)
+	createdID, err := d.createContainer(ctx, candidate, runtimeImage, candidateVolume, containerName, deploymentID, hostIP, hostPort, false)
 	if err != nil {
 		return err
 	}
@@ -750,45 +752,6 @@ func randomBackupToken() (string, error) {
 		return "", fmt.Errorf("create backup identity: %w", err)
 	}
 	return hex.EncodeToString(value), nil
-}
-
-func (d *LocalDocker) pullImage(ctx context.Context, image string) error {
-	query := url.Values{"fromImage": []string{image}}
-	response, err := d.dockerRequest(ctx, http.MethodPost, "/images/create", query, nil)
-	if err != nil {
-		return fmt.Errorf("pull immutable RepoWrangler image: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("pull immutable RepoWrangler image: Docker Engine returned HTTP %d", response.StatusCode)
-	}
-	limited := &io.LimitedReader{R: response.Body, N: maximumDockerResponse + 1}
-	decoder := json.NewDecoder(limited)
-	var consumed int64
-	for {
-		var message struct {
-			Error       string `json:"error"`
-			ErrorDetail struct {
-				Message string `json:"message"`
-			} `json:"errorDetail"`
-		}
-		if err := decoder.Decode(&message); errors.Is(err, io.EOF) {
-			if limited.N == 0 {
-				return errors.New("Docker Engine image-pull stream exceeded the response safety limit")
-			}
-			break
-		} else if err != nil {
-			return errors.New("Docker Engine returned an invalid image-pull stream")
-		}
-		consumed++
-		if consumed > 100_000 {
-			return errors.New("Docker Engine image-pull stream exceeded the event safety limit")
-		}
-		if message.Error != "" || message.ErrorDetail.Message != "" {
-			return errors.New("Docker Engine could not pull the immutable RepoWrangler image")
-		}
-	}
-	return nil
 }
 
 func (d *LocalDocker) dockerJSON(ctx context.Context, method, endpoint string, query url.Values, input any, expectedStatus int, output any) error {

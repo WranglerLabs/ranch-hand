@@ -86,6 +86,12 @@ func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, c
 	if err != nil {
 		return err
 	}
+	if kind == lifecycle.Uninstall {
+		if backups.Selected != nil || backups.Safety != nil {
+			return errors.New("local Docker uninstall does not accept backup state")
+		}
+		return d.removeOwnedDeployment(ctx, candidate, project, dataVolume)
+	}
 	identity, err := bundle.ReadIdentity(staged)
 	if err != nil {
 		return err
@@ -119,6 +125,33 @@ func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, c
 	}
 	_, err = d.createContainer(ctx, candidate, identity.Image, dataVolume, containerName, deploymentID, hostIP, hostPort, true)
 	return err
+}
+
+func (d *LocalDocker) removeOwnedDeployment(ctx context.Context, candidate plan.DeploymentPlan, project, dataVolume string) error {
+	deploymentID, err := lifecycle.DeploymentID(candidate)
+	if err != nil {
+		return err
+	}
+	containerName := project + "-server"
+	exists, metadata, err := d.containerMetadata(ctx, containerName)
+	if err != nil {
+		return err
+	}
+	if exists {
+		if err := verifyOwnership(metadata.Labels, deploymentID, "container"); err != nil {
+			return err
+		}
+		if metadata.DataVolume != "" && metadata.DataVolume != dataVolume {
+			return errors.New("refusing to remove a local Docker container attached to an unexpected data volume")
+		}
+		if err := d.dockerJSON(ctx, http.MethodDelete, "/containers/"+url.PathEscape(metadata.ID), url.Values{"force": []string{"1"}, "v": []string{"1"}}, nil, http.StatusNoContent, nil); err != nil {
+			return fmt.Errorf("remove owned local Docker container: %w", err)
+		}
+	}
+	if err := d.removeManagedVolumeIfPresent(ctx, dataVolume, deploymentID); err != nil {
+		return fmt.Errorf("remove owned local Docker data volume: %w", err)
+	}
+	return nil
 }
 
 func (d *LocalDocker) createContainer(ctx context.Context, candidate plan.DeploymentPlan, image, dataVolume, containerName, deploymentID, hostIP, hostPort string, start bool) (string, error) {
@@ -384,6 +417,16 @@ func decodeHealthResponse(response *http.Response, output any) error {
 }
 
 func (d *LocalDocker) Recover(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, fromVersion string, backups lifecycle.OperationBackups, _ Credentials) error {
+	if kind == lifecycle.Uninstall {
+		if backups.Selected != nil || backups.Safety != nil {
+			return errors.New("local Docker uninstall recovery does not accept backup state")
+		}
+		project, dataVolume, _, _, err := localDockerInputs(candidate)
+		if err != nil {
+			return err
+		}
+		return d.removeOwnedDeployment(ctx, candidate, project, dataVolume)
+	}
 	if kind == lifecycle.Update || kind == lifecycle.Restore || kind == lifecycle.Rollback || kind == lifecycle.Repair {
 		return d.recoverReplacement(ctx, candidate, fromVersion, backups.Safety)
 	}

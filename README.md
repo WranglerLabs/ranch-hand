@@ -84,13 +84,13 @@ streams it directly into the selected WSL Docker Engine. Compose uses only that
 loaded image with `pull_policy: never`; the WSL install does not contact GHCR
 and does not require a GitHub account, registry login, or token.
 
-This Preview supports WSL evaluation installation and managed permanent
-removal. An active WSL deployment appears in **Managed deployments** with an
+Every active evaluation deployment appears in **Managed deployments** with an
 explicit data-deletion confirmation and **Permanently remove deployment**
-action. WSL backup, update, restore, rollback, repair, and retain-data uninstall
-remain open lifecycle work. Use the ownership-checked
-[manual removal runbook](docs/uninstall.md) for retain-data removal and targets
-that do not yet expose managed uninstall.
+action. Managed removal covers Docker Desktop, WSL Compose, remote Linux
+Compose, Azure Container Apps, and Cloudflare Worker plus D1. Each adapter
+rechecks its exact ownership evidence before deleting resources, and cloud or
+remote targets require fresh in-memory credentials. Use the
+[manual removal runbook](docs/uninstall.md) for retain-data removal.
 
 If an install is interrupted after Ranch Hand creates its dedicated directory,
 the next preflight recognizes the matching durable journal and offers
@@ -182,7 +182,7 @@ Every committed install and version-changing operation also advances a validated
 
 The Windows interface can export a versioned redacted diagnostics JSON snapshot. It includes lifecycle phases, immutable versions, timestamps, target families, an export-scoped deployment pseudonym, random operation/backup IDs, and safe integrity hashes. It explicitly excludes stable deployment IDs, plans and their deterministic digests, configuration values, backup locators, URLs, hostnames, domains, account/resource identifiers, credentials, environment variables, request bodies, and arbitrary logs. Collection fails closed rather than silently skipping corrupt lifecycle state. See [ADR-0008](docs/adr/0008-redacted-diagnostics-boundary.md).
 
-The coordinator implements install, backup, and backup-first update/restore/rollback/repair sequencing. It binds `backup-complete` to an exact validated safety-backup record, binds historical restore input to a separate inventory record, stages only the verified plan artifact, and automatically enters recovery if apply, health verification, or the post-apply journal write fails. Recovery receives a cancellation-independent bounded context so a closed browser request cannot abandon a partially mutated target. All five initial targets are wired for the bounded evaluation installs above; local Docker Desktop also supports consistent backup and copy-on-write update, restore, rollback, and repair. Uninstall and the remaining target lifecycle mutations remain disabled. See [ADR-0002](docs/adr/0002-durable-lifecycle-transactions.md) for phase rules, recovery semantics, and trade-offs.
+The coordinator implements install, managed permanent uninstall, backup, and backup-first update/restore/rollback/repair sequencing. It binds `backup-complete` to an exact validated safety-backup record, binds historical restore input to a separate inventory record, stages only the verified plan artifact, and automatically enters recovery if apply, health verification, or the post-apply journal write fails. Recovery receives a cancellation-independent bounded context so a closed browser request cannot abandon a partially mutated target. All five initial targets support bounded evaluation install and ownership-checked permanent uninstall; local Docker Desktop also supports consistent backup and copy-on-write update, restore, rollback, and repair. The remaining non-local lifecycle mutations remain disabled. See [ADR-0002](docs/adr/0002-durable-lifecycle-transactions.md) for phase rules, recovery semantics, and trade-offs.
 
 ## Build from source
 

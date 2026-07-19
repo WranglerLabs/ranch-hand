@@ -180,10 +180,11 @@ release. Ranch Hand will not accept an arbitrary version or filesystem backup
 path. Every destructive cleanup rechecks Ranch Hand ownership labels and stops on
 missing or ambiguous evidence.
 
-Managed permanent uninstall is available for active WSL Compose deployments
-from **Managed deployments**. Other targets, and WSL retain-data removal, use
-the target-specific [manual removal runbook](uninstall.md). It separates
-retain-data and permanent-deletion paths and requires exact ownership checks.
+Managed permanent uninstall is available for every active deployment from
+**Managed deployments**. Cloud targets and remote Linux request fresh in-memory
+credentials. Ranch Hand permanently removes data only after target-specific
+ownership checks and then closes the installation inventory record. Retain-data
+removal uses the target-specific [manual removal runbook](uninstall.md).
 Never delete Ranch Hand's local catalog merely to bypass an active installation
 record.
 

@@ -28,6 +28,12 @@ func (a *AzureContainerApps) Backup(context.Context, plan.DeploymentPlan, string
 }
 
 func (a *AzureContainerApps) Apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, _ string, staged bundle.StagedBundle, backups lifecycle.OperationBackups, credentials Credentials) error {
+	if kind == lifecycle.Uninstall {
+		if backups.Selected != nil || backups.Safety != nil {
+			return errors.New("Azure uninstall does not accept backup state")
+		}
+		return a.removeOwnedDeployment(ctx, candidate, credentials)
+	}
 	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return errors.New("the Azure Container Apps adapter currently supports only a new evaluation install")
 	}
@@ -96,6 +102,52 @@ func (a *AzureContainerApps) Apply(ctx context.Context, kind lifecycle.Operation
 	}
 	a.rememberExpectedImage(deploymentID, identity.Image)
 	return a.waitForDeployment(ctx, deploymentURL, headers)
+}
+
+func (a *AzureContainerApps) removeOwnedDeployment(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) error {
+	if strings.TrimSpace(credentials.AzureAccessToken) == "" {
+		return errors.New("an in-memory Azure ARM access token is required for uninstall")
+	}
+	deploymentID, err := lifecycle.DeploymentID(candidate)
+	if err != nil {
+		return err
+	}
+	groupURL, _, err := a.azureURLs(candidate)
+	if err != nil {
+		return err
+	}
+	headers := azureHeaders(credentials)
+	var group struct {
+		Tags map[string]string `json:"tags"`
+	}
+	status, readErr := controlPlaneJSON(ctx, a.client, http.MethodGet, groupURL, headers, &group)
+	if status == http.StatusNotFound {
+		return nil
+	}
+	if readErr != nil {
+		return fmt.Errorf("inspect Azure resource group for uninstall: %w", readErr)
+	}
+	if group.Tags["wranglerlabs-ranch-hand-managed"] != "true" || group.Tags["wranglerlabs-ranch-hand-deployment"] != deploymentID || group.Tags["wranglerlabs-ranch-hand-version"] != candidate.Release.Version {
+		return errors.New("refusing to delete an Azure resource group not owned by this exact Ranch Hand deployment")
+	}
+	if _, err := a.armJSON(ctx, http.MethodDelete, groupURL, headers, nil, nil); err != nil {
+		return fmt.Errorf("delete owned Azure resource group: %w", err)
+	}
+	deadline, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		status, _ := controlPlaneJSON(deadline, a.client, http.MethodGet, groupURL, headers, nil)
+		if status == http.StatusNotFound {
+			return nil
+		}
+		select {
+		case <-deadline.Done():
+			return errors.New("owned Azure resource group deletion did not complete within 30 minutes")
+		case <-ticker.C:
+		}
+	}
 }
 
 func armValue(value any) map[string]any { return map[string]any{"value": value} }
@@ -316,6 +368,12 @@ func azureHealthReady(ctx context.Context, client *http.Client, fqdn, expectedVe
 }
 
 func (a *AzureContainerApps) Recover(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, _ string, backups lifecycle.OperationBackups, credentials Credentials) error {
+	if kind == lifecycle.Uninstall {
+		if backups.Selected != nil || backups.Safety != nil {
+			return errors.New("Azure uninstall recovery does not accept backup state")
+		}
+		return a.removeOwnedDeployment(ctx, candidate, credentials)
+	}
 	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return errors.New("Azure recovery currently supports only a failed new evaluation install")
 	}

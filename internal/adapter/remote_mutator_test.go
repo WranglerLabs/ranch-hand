@@ -432,6 +432,22 @@ func TestRemoteRecoveryRemovesOnlyMarkerOwnedResources(t *testing.T) {
 	}
 }
 
+func TestRemoteUninstallRemovesOnlyMarkerOwnedResources(t *testing.T) {
+	host := newFakeRemoteHost()
+	adapter := newRemoteLinuxCompose(func(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, error) { return host, nil })
+	candidate := remoteEvaluationPlan()
+	credentials := Credentials{SSHPassword: "runtime-only"}
+	if err := adapter.Apply(context.Background(), lifecycle.Install, candidate, "", stagedRemoteBundle(t), lifecycle.OperationBackups{}, credentials); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.Apply(context.Background(), lifecycle.Uninstall, candidate, candidate.Release.Version, bundle.StagedBundle{}, lifecycle.OperationBackups{}, credentials); err != nil {
+		t.Fatal(err)
+	}
+	if !host.composeDown || host.directory || host.resources {
+		t.Fatal("owned remote deployment was not uninstalled")
+	}
+}
+
 func TestRemoteRemnantCleanupRequiresMarkerOrEmptyDirectory(t *testing.T) {
 	candidate := remoteEvaluationPlan()
 	credentials := Credentials{SSHPassword: "runtime-only"}

@@ -56,6 +56,12 @@ func (a *RemoteLinuxCompose) Backup(context.Context, plan.DeploymentPlan, string
 }
 
 func (a *RemoteLinuxCompose) Apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, _ string, staged bundle.StagedBundle, backups lifecycle.OperationBackups, credentials Credentials) error {
+	if kind == lifecycle.Uninstall {
+		if backups.Selected != nil || backups.Safety != nil {
+			return errors.New("remote Linux uninstall does not accept backup state")
+		}
+		return a.removeOwnedDeployment(ctx, candidate, credentials)
+	}
 	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return errors.New("the remote Linux Compose adapter currently supports only a new evaluation install")
 	}
@@ -80,6 +86,19 @@ func (a *RemoteLinuxCompose) Apply(ctx context.Context, kind lifecycle.Operation
 		return fmt.Errorf("prepare verified release image on remote Linux: %w", err)
 	}
 	return a.apply(ctx, kind, candidate, staged, backups, credentials, runtimeImage, true)
+}
+
+func (a *RemoteLinuxCompose) removeOwnedDeployment(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) error {
+	host, err := a.connect(ctx, candidate, credentials)
+	if err != nil {
+		return err
+	}
+	defer host.Close()
+	marker, err := readRemoteMarker(ctx, host, candidate)
+	if err != nil {
+		return errors.New("refusing remote uninstall without the exact Ranch Hand ownership marker")
+	}
+	return cleanupOwnedRemote(ctx, host, candidate, marker)
 }
 
 func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, staged bundle.StagedBundle, backups lifecycle.OperationBackups, credentials Credentials, runtimeImage string, requireSetupToken bool) error {
@@ -507,6 +526,12 @@ func directRemoteHealthReady(ctx context.Context, client *http.Client, host, ver
 }
 
 func (a *RemoteLinuxCompose) Recover(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, _ string, backups lifecycle.OperationBackups, credentials Credentials) error {
+	if kind == lifecycle.Uninstall {
+		if backups.Selected != nil || backups.Safety != nil {
+			return errors.New("remote Linux uninstall recovery does not accept backup state")
+		}
+		return a.removeOwnedDeployment(ctx, candidate, credentials)
+	}
 	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return errors.New("remote Linux recovery currently supports only a failed new evaluation install")
 	}

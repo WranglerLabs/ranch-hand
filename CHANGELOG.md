@@ -6,6 +6,16 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+### Fixed
+
+- WSL real-mode installation no longer inherits the Remote Linux requirement
+  for a generated setup token when the WSL plan is normalized through the
+  shared Compose implementation.
+- Managed permanent uninstall now covers Docker Desktop, WSL Compose, Remote
+  Linux Compose, Azure Container Apps, and Cloudflare Worker plus D1. Every
+  adapter verifies its exact ownership evidence before deleting persistent
+  data, and remote or cloud credentials remain in memory only.
+
 ## [0.1.0-rc.26] - 2026-07-19
 
 **Classification: Public Preview.** Publicly downloadable and intended for

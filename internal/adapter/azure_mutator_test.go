@@ -134,6 +134,36 @@ func TestAzureInstallRecoveryDeletesOnlyOwnedResourceGroup(t *testing.T) {
 	}
 }
 
+func TestAzureUninstallDeletesOnlyExactOwnedResourceGroup(t *testing.T) {
+	candidate := azureEvaluationPlan()
+	deploymentID, err := lifecycle.DeploymentID(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleted := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodDelete {
+			deleted = true
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		if deleted {
+			http.Error(w, "missing", http.StatusNotFound)
+			return
+		}
+		_, _ = io.WriteString(w, `{"tags":{"wranglerlabs-ranch-hand-managed":"true","wranglerlabs-ranch-hand-deployment":"`+deploymentID+`","wranglerlabs-ranch-hand-version":"v1.2.3"}}`)
+	}))
+	defer server.Close()
+	adapter := newAzureContainerApps(server.Client(), server.URL)
+	if err := adapter.Apply(context.Background(), lifecycle.Uninstall, candidate, candidate.Release.Version, bundle.StagedBundle{}, lifecycle.OperationBackups{}, Credentials{AzureAccessToken: "azure-token"}); err != nil {
+		t.Fatal(err)
+	}
+	if !deleted {
+		t.Fatal("owned Azure resource group was not uninstalled")
+	}
+}
+
 func TestAzureInstallRecoveryRefusesUnownedResourceGroup(t *testing.T) {
 	deleted := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

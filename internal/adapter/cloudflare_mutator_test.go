@@ -221,6 +221,40 @@ func TestCloudflareRecoveryDeletesOnlyMarkerOwnedResources(t *testing.T) {
 	}
 }
 
+func TestCloudflareUninstallDeletesOnlyMarkerOwnedResources(t *testing.T) {
+	candidate := cloudflareEvaluationPlan()
+	deploymentID, _ := lifecycle.DeploymentID(candidate)
+	var workerDeleted, databaseDeleted bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/d1/database"):
+			writeCloudflareResult(w, `[{"name":"repo-wrangler","uuid":"`+cloudflareTestDatabaseID+`"}]`)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/query"):
+			writeCloudflareResult(w, `[{"success":true,"results":[{"deployment_id":"`+deploymentID+`","release_version":"v1.2.3"}]}]`)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/workers/scripts/repo-wrangler"):
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/settings"):
+			writeCloudflareResult(w, `{"compatibility_date":"2026-07-01","bindings":[{"type":"d1","name":"DB","database_id":"`+cloudflareTestDatabaseID+`"},{"type":"plain_text","name":"APP_VERSION","text":"v1.2.3"}]}`)
+		case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/workers/scripts/repo-wrangler"):
+			workerDeleted = true
+			writeCloudflareResult(w, `{}`)
+		case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/d1/database/"+cloudflareTestDatabaseID):
+			databaseDeleted = true
+			writeCloudflareResult(w, `{}`)
+		default:
+			t.Fatalf("unexpected uninstall request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+	adapter := newCloudflare(server.Client(), server.URL)
+	if err := adapter.Apply(context.Background(), lifecycle.Uninstall, candidate, candidate.Release.Version, bundle.StagedBundle{}, lifecycle.OperationBackups{}, Credentials{CloudflareAPIToken: "cf-token"}); err != nil {
+		t.Fatal(err)
+	}
+	if !workerDeleted || !databaseDeleted {
+		t.Fatal("owned Cloudflare resources were not uninstalled")
+	}
+}
+
 func TestCloudflareRecoveryRefusesUnownedDatabase(t *testing.T) {
 	deleted := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

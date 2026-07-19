@@ -66,6 +66,12 @@ func (c *Cloudflare) Backup(context.Context, plan.DeploymentPlan, string, Creden
 }
 
 func (c *Cloudflare) Apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, _ string, staged bundle.StagedBundle, backups lifecycle.OperationBackups, credentials Credentials) error {
+	if kind == lifecycle.Uninstall {
+		if backups.Selected != nil || backups.Safety != nil {
+			return errors.New("Cloudflare uninstall does not accept backup state")
+		}
+		return c.removeOwnedDeployment(ctx, candidate, credentials)
+	}
 	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return errors.New("the Cloudflare adapter currently supports only a new evaluation install")
 	}
@@ -123,6 +129,52 @@ func (c *Cloudflare) Apply(ctx context.Context, kind lifecycle.OperationKind, ca
 		return fmt.Errorf("enable Cloudflare-managed HTTPS endpoint: %w", err)
 	}
 	c.rememberExpected(deploymentID, created.UUID, identity)
+	return nil
+}
+
+func (c *Cloudflare) removeOwnedDeployment(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) error {
+	if strings.TrimSpace(credentials.CloudflareAPIToken) == "" {
+		return errors.New("an in-memory Cloudflare API token is required for uninstall")
+	}
+	account, worker, databaseName := cloudflareNames(candidate)
+	headers := cloudflareHeaders(credentials)
+	databases, err := c.findDatabases(ctx, account, databaseName, headers)
+	if err != nil {
+		return err
+	}
+	if len(databases) == 0 {
+		status, _ := controlPlaneJSON(ctx, c.client, http.MethodGet, c.baseURL+"/accounts/"+account+"/workers/scripts/"+worker, headers, nil)
+		if status == http.StatusNotFound {
+			return nil
+		}
+		return errors.New("refusing to report uninstall complete while the Worker exists without its D1 ownership marker")
+	}
+	if len(databases) != 1 {
+		return errors.New("refusing uninstall because the D1 database identity is ambiguous")
+	}
+	deploymentID, err := lifecycle.DeploymentID(candidate)
+	if err != nil {
+		return err
+	}
+	if err := c.verifyOwnershipMarker(ctx, account, databases[0].UUID, deploymentID, candidate.Release.Version, headers); err != nil {
+		return err
+	}
+	status, _ := controlPlaneJSON(ctx, c.client, http.MethodGet, c.baseURL+"/accounts/"+account+"/workers/scripts/"+worker, headers, nil)
+	if status != http.StatusNotFound {
+		if status < 200 || status >= 300 {
+			return errors.New("owned Worker identity could not be inspected for uninstall")
+		}
+		if err := c.verifyWorkerSettings(ctx, account, worker, databases[0].UUID, candidate.Release.Version, nil, headers); err != nil {
+			return errors.New("refusing to delete a Worker that does not match the owned deployment")
+		}
+		if err := c.cloudflareJSON(ctx, http.MethodDelete, c.baseURL+"/accounts/"+account+"/workers/scripts/"+worker, headers, nil, nil); err != nil {
+			return fmt.Errorf("delete owned Worker: %w", err)
+		}
+	}
+	destination := c.baseURL + "/accounts/" + account + "/d1/database/" + url.PathEscape(databases[0].UUID)
+	if err := c.cloudflareJSON(ctx, http.MethodDelete, destination, headers, nil, nil); err != nil {
+		return fmt.Errorf("delete owned D1 database: %w", err)
+	}
 	return nil
 }
 
@@ -635,6 +687,12 @@ func cloudflareHealthReady(ctx context.Context, client *http.Client, hostname, v
 }
 
 func (c *Cloudflare) Recover(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, _ string, backups lifecycle.OperationBackups, credentials Credentials) error {
+	if kind == lifecycle.Uninstall {
+		if backups.Selected != nil || backups.Safety != nil {
+			return errors.New("Cloudflare uninstall recovery does not accept backup state")
+		}
+		return c.removeOwnedDeployment(ctx, candidate, credentials)
+	}
 	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return errors.New("Cloudflare recovery currently supports only a failed new evaluation install")
 	}

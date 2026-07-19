@@ -155,6 +155,43 @@ func TestLocalDockerRecoveryDeletesOnlyOwnedContainer(t *testing.T) {
 	}
 }
 
+func TestLocalDockerUninstallDeletesOwnedContainerAndVolume(t *testing.T) {
+	candidate := localInstallPlan()
+	deploymentID, err := lifecycle.DeploymentID(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	containerDeleted, volumeDeleted := false, false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/containers/"):
+			if containerDeleted {
+				http.Error(w, "missing", http.StatusNotFound)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "owned-id", "Config": map[string]any{"Labels": map[string]string{"com.wranglerlabs.ranch-hand.managed": "true", "com.wranglerlabs.ranch-hand.deployment": deploymentID}}, "Mounts": []map[string]string{{"Type": "volume", "Name": candidate.Configuration["dataVolume"], "Destination": "/app/data"}}})
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/containers/"):
+			containerDeleted = true
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/volumes/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"Labels": map[string]string{"com.wranglerlabs.ranch-hand.managed": "true", "com.wranglerlabs.ranch-hand.deployment": deploymentID}})
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/volumes/"):
+			volumeDeleted = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected uninstall request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+	adapter := &LocalDocker{client: server.Client(), baseURL: server.URL}
+	if err := adapter.Apply(context.Background(), lifecycle.Uninstall, candidate, candidate.Release.Version, bundle.StagedBundle{}, lifecycle.OperationBackups{}, Credentials{}); err != nil {
+		t.Fatal(err)
+	}
+	if !containerDeleted || !volumeDeleted {
+		t.Fatal("owned local Docker container and volume were not both uninstalled")
+	}
+}
+
 func TestLocalDockerRecoveryRefusesUnownedContainer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"Id": "unowned", "Config": map[string]any{"Labels": map[string]string{}}})

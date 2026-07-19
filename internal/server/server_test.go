@@ -335,6 +335,24 @@ func TestManagedWSLUninstallRequiresPermanentDeleteConfirmation(t *testing.T) {
 	if response.Code != http.StatusOK || runner.request.Kind != lifecycle.Uninstall || runner.request.FromVersion != "v1.2.3" || runner.request.Plan.Target.Kind != "local-wsl-compose" {
 		t.Fatalf("confirmed WSL uninstall was not dispatched: %d %s request=%+v", response.Code, response.Body.String(), runner.request)
 	}
+
+	local := candidate
+	local.Name = "Local Docker Wrangler"
+	local.Target.Kind = "local-compose"
+	local.Configuration = map[string]string{"projectName": "repo-wrangler", "dataVolume": "repo-wrangler-data", "listenAddress": "127.0.0.1:8080"}
+	localEncoded, err := plan.CanonicalJSON(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localID, err := lifecycle.DeploymentID(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader.records = append(reader.records, lifecycle.InstallationRecord{DeploymentID: localID, Target: "local-compose", State: lifecycle.InstallationActive, Version: "v1.2.3", Plan: localEncoded})
+	response = authorizedPost(h, "/api/v1/installations/"+localID+"/uninstall", `{"confirmed":true,"deleteData":true,"credentials":{}}`)
+	if response.Code != http.StatusOK || runner.request.Plan.Target.Kind != "local-compose" {
+		t.Fatalf("confirmed local Docker uninstall was not dispatched: %d %s request=%+v", response.Code, response.Body.String(), runner.request)
+	}
 }
 
 func TestListsAndExplicitlyPrunesLocalRollbackPool(t *testing.T) {

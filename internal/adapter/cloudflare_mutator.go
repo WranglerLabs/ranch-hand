@@ -42,6 +42,10 @@ var cloudflareManagedHostname = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[
 type cloudflareEnvelope struct {
 	Success bool            `json:"success"`
 	Result  json.RawMessage `json:"result"`
+	Errors  []struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"errors"`
 }
 
 type cloudflareDatabase struct {
@@ -787,7 +791,22 @@ func (c *Cloudflare) doCloudflare(request *http.Request, output any) error {
 	if len(contents) > maxControlPlaneResponse {
 		return errors.New("Cloudflare response exceeded the safety limit")
 	}
+	var envelope cloudflareEnvelope
+	envelopeValid := json.Unmarshal(contents, &envelope) == nil
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		if envelopeValid && len(envelope.Errors) > 0 {
+			message := strings.Map(func(value rune) rune {
+				if value < 0x20 || value == 0x7f {
+					return -1
+				}
+				return value
+			}, envelope.Errors[0].Message)
+			messageRunes := []rune(message)
+			if len(messageRunes) > 512 {
+				message = string(messageRunes[:512])
+			}
+			return fmt.Errorf("Cloudflare returned HTTP %d (code %d): %s", response.StatusCode, envelope.Errors[0].Code, message)
+		}
 		return fmt.Errorf("Cloudflare returned HTTP %d", response.StatusCode)
 	}
 	if len(contents) == 0 {
@@ -796,8 +815,7 @@ func (c *Cloudflare) doCloudflare(request *http.Request, output any) error {
 		}
 		return nil
 	}
-	var envelope cloudflareEnvelope
-	if err := json.Unmarshal(contents, &envelope); err != nil || !envelope.Success {
+	if !envelopeValid || !envelope.Success {
 		return errors.New("Cloudflare returned an unsuccessful or invalid response")
 	}
 	if output != nil {

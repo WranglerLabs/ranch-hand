@@ -274,3 +274,35 @@ func TestCloudflareRecoveryRefusesUnownedDatabase(t *testing.T) {
 		t.Fatal("Cloudflare recovery deleted or accepted an unowned database")
 	}
 }
+
+func TestCloudflareErrorIncludesBoundedSanitizedAPIMessage(t *testing.T) {
+	apiMessage := "schedule rejected\r\n" + strings.Repeat("é", 600)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": false,
+			"errors":  []map[string]any{{"code": 10021, "message": apiMessage}},
+		})
+	}))
+	defer server.Close()
+
+	request, err := http.NewRequest(http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = newCloudflare(server.Client(), server.URL).doCloudflare(request, nil)
+	if err == nil {
+		t.Fatal("expected Cloudflare API error")
+	}
+	message := err.Error()
+	if !strings.HasPrefix(message, "Cloudflare returned HTTP 400 (code 10021): schedule rejected") {
+		t.Fatalf("Cloudflare error omitted the API diagnostic: %q", message)
+	}
+	if strings.ContainsAny(message, "\r\n") {
+		t.Fatalf("Cloudflare error retained control characters: %q", message)
+	}
+	detail := strings.TrimPrefix(message, "Cloudflare returned HTTP 400 (code 10021): ")
+	if len([]rune(detail)) != 512 {
+		t.Fatalf("Cloudflare error detail was not bounded to 512 characters: %d", len([]rune(detail)))
+	}
+}

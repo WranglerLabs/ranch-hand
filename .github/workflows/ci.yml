@@ -31,3 +31,70 @@ jobs:
       - name: Go vulnerability scan
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
       - run: go build -trimpath -o dist/ranch-hand.exe ./cmd/ranch-hand
+
+  public-product-artifact:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: v1.0.16
+      MANIFEST_SHA256: b7134a6e8a4aef5ef8b79093d5d2173a17be0035feb67bbc9c2b238bb514f70b
+      COMPOSE_SHA256: 7cfb22dddf932b0f181e3abd9cf5f5776bfc124119400eb1ba8b7fc017ad6497
+      IMAGE_ARCHIVE_SHA256: 27074e93fec1ddca6ccf36fc6785aa7a5a04da4fba3375da534d094c5dd635ff
+      IMAGE_ARCHIVE_SIZE: '280816012'
+      REGISTRY_DIGEST: sha256:2db2198b4573d3c699edf416730c825b56f106356154c45f008c7745be9eba70
+      ARCHIVE_MANIFEST_DIGEST: sha256:0c47c9f2fd048fdb0149228177af864eb0663bc50d6b7eaa0aeaf36afaf600ba
+      IMAGE_CONFIG_DIGEST: sha256:05ecc27552403fd358dc08f7e57fcbb73ca92c335cd31e8c40f35fd3bf62d759
+      RUNTIME_IMAGE: repo-wrangler-ranch-hand:v1.0.16
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and verify immutable public artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://github.com/WranglerLabs/repo-wrangler/releases/download/${RELEASE_VERSION}"
+          curl --fail --location --retry 3 --output /tmp/release-manifest.json "${base}/release-manifest.json"
+          curl --fail --location --retry 3 --output /tmp/compose.tar.gz "${base}/repo-wrangler-compose-${RELEASE_VERSION}.tar.gz"
+          curl --fail --location --retry 3 --output /tmp/image.tar.gz "${base}/repo-wrangler-${RELEASE_VERSION}-linux-amd64-image.tar.gz"
+          echo "${MANIFEST_SHA256}  /tmp/release-manifest.json" | sha256sum --check
+          echo "${COMPOSE_SHA256}  /tmp/compose.tar.gz" | sha256sum --check
+          echo "${IMAGE_ARCHIVE_SHA256}  /tmp/image.tar.gz" | sha256sum --check
+          test "$(stat --format=%s /tmp/image.tar.gz)" = "${IMAGE_ARCHIVE_SIZE}"
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const manifest = JSON.parse(fs.readFileSync('/tmp/release-manifest.json'));
+          if (manifest.version !== process.env.RELEASE_VERSION) throw new Error('release version mismatch');
+          const compose = manifest.artifacts.find((artifact) => artifact.target === 'local-compose');
+          if (!compose || compose.sha256 !== process.env.COMPOSE_SHA256) throw new Error('Compose identity mismatch');
+          NODE
+      - name: Inspect and load the exact Ranch Hand image archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive_manifest="$(tar -xOzf /tmp/image.tar.gz index.json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s).manifests[0].digest))")"
+          test "$archive_manifest" = "$ARCHIVE_MANIFEST_DIGEST"
+          tar -xOzf /tmp/image.tar.gz manifest.json | grep --fixed-strings '"repo-wrangler-ranch-hand:v1.0.16"'
+          docker load --input /tmp/image.tar.gz
+          test "$(docker image inspect --format '{{.Id}}' "$RUNTIME_IMAGE")" = "$IMAGE_CONFIG_DIGEST"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$RUNTIME_IMAGE")" = "$RELEASE_VERSION"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$RUNTIME_IMAGE")" = 'f99609eadb6aec4803c9cd41ab50049ff38d4c87'
+      - name: Compose-start and exercise the published first-run application
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir /tmp/compose
+          tar -xzf /tmp/compose.tar.gz -C /tmp/compose --strip-components=1
+          grep --fixed-strings "ghcr.io/wranglerlabs/repo-wrangler-server@${REGISTRY_DIGEST}" /tmp/compose/compose.yaml
+          sed -i "s|ghcr.io/wranglerlabs/repo-wrangler-server@${REGISTRY_DIGEST}|${RUNTIME_IMAGE}|" /tmp/compose/compose.yaml
+          sed -i 's/pull_policy: always/pull_policy: never/' /tmp/compose/compose.yaml
+          cat > /tmp/compose/.env <<'ENV'
+          BIND_ADDRESS=127.0.0.1
+          PORT=18080
+          DEMO_MODE=false
+          AUTH_PROVIDERS=github
+          ENABLE_SCHEDULER=false
+          SESSION_SECRET=ranch-hand-public-artifact-session-secret
+          SECRET_ENCRYPTION_KEY=ranch-hand-public-artifact-encryption-key
+          ENV
+          cleanup() { POSTGRES_PASSWORD=ranch-hand-postgres-profile-disabled docker compose --project-directory /tmp/compose --project-name ranch-hand-public-smoke down --volumes --remove-orphans; }
+          trap cleanup EXIT
+          POSTGRES_PASSWORD=ranch-hand-postgres-profile-disabled docker compose --project-directory /tmp/compose --project-name ranch-hand-public-smoke up --detach server
+          node scripts/smoke-public-repo-wrangler.mjs http://127.0.0.1:18080 1.0.16

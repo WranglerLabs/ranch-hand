@@ -67,11 +67,11 @@ existing environment.
 
 | Target | What you need | Current boundary |
 |---|---|---|
-| Local Docker Compose — WSL | An installed WSL2 Ubuntu/Debian distribution | If Engine or Compose is missing, Ranch Hand offers to install it inside WSL, start Docker, grant the WSL user access, and rerun preflight. **Demo mode** is an explicit toggle and defaults off. Off generates protected local secrets and opens real first-run provider setup at `http://127.0.0.1:8080/onboarding`; on uses mock data. Ranch Hand verifies and loads the public v1.0.15 image archive with pulls disabled. Docker Desktop, SSH, a WSL IP, filesystem path, GitHub account, token, and registry login are not required. |
+| Local Docker Compose — WSL | An installed WSL2 Ubuntu/Debian distribution | If Engine or Compose is missing, Ranch Hand offers to install it inside WSL, start Docker, grant the WSL user access, and rerun preflight. **Demo mode** is an explicit toggle and defaults off. Off generates protected local secrets and opens real first-run provider setup at `http://127.0.0.1:8080/onboarding`; on uses mock data. Ranch Hand verifies and loads the selected immutable release's public image archive with pulls disabled. Docker Desktop, SSH, a WSL IP, filesystem path, GitHub account, token, and registry login are not required. |
 | Local Docker Desktop | Windows Package Manager, or an already installed Docker Desktop running Linux containers | If unavailable, Ranch Hand offers to install Docker Desktop through `winget`; administrator approval, first-run terms, and startup may still be required. Windows Docker API, loopback-only demo/SQLite deployment. Full backup, update, restore, rollback, repair, recovery, and rollback-pool retention are available. |
 | Azure Container Apps | An Azure subscription, permission to create a dedicated resource group and ACA resources, and a temporary ARM access token | New resource group, demo mode, SQLite on Azure Files, and Azure-managed HTTPS. Resources can incur Azure charges. Existing groups, PostgreSQL, production credentials, custom domains, and update are not enabled. |
 | Cloudflare | Account ID, unused Worker and D1 names, a workers.dev subdomain, and a scoped API token with account read, Workers Scripts write, and D1 write access | New Worker and D1 database in demo mode with Cloudflare-managed workers.dev HTTPS. Existing resources, custom domains, production secrets, backup, and update are not enabled. |
-| Remote Linux Docker Compose | Existing Ubuntu/Debian host at an explicit private IPv4 address and an SSH password or private key; sudo is needed only when Docker prerequisites are missing | If Engine or Compose is missing, Ranch Hand offers a bounded sudo-backed install, starts Docker, grants the user access, and reruns preflight. Ranch Hand verifies the public image archive on Windows, streams it to Docker over the pinned SSH connection, verifies the loaded image ID, and disables registry pulls. The target needs no GitHub account, GHCR login, token, or registry access. SSH port and project are prefilled; entering the user fills its default installation directory. The successful credential is reused for installation only in memory. The project publishes port 8080 on the selected private address, and Ranch Hand verifies `http://<private-ip>:8080` from Windows before reporting success. Ranch Hand does not install public ingress, a proxy, or Linux. Backup and update are not enabled. |
+| Remote Linux Docker Compose | Existing Ubuntu/Debian host at an explicit private IPv4 address and an SSH password or private key; sudo is needed only when Docker prerequisites are missing | If Engine or Compose is missing, Ranch Hand offers a bounded sudo-backed install, starts Docker, grants the user access, and reruns preflight. Ranch Hand verifies the public image archive on Windows, streams it to Docker over the pinned SSH connection, verifies the loaded image ID, and disables registry pulls. The target needs no GitHub account, GHCR login, token, or registry access. SSH port and project are prefilled; entering the user fills its default installation directory. The successful credential is reused for installation only in memory. The project publishes port 8080 on the selected private address, and Ranch Hand verifies `http://<private-ip>:8080` from Windows before reporting success. Real mode also generates a one-time setup token, writes it only to the protected remote environment, and shows it in the committed result. Ranch Hand does not install public ingress, a proxy, or Linux. Backup and update are not enabled. |
 
 Azure, Cloudflare, and Remote Linux credentials are entered once for live
 preflight. After a successful check, Ranch Hand retains the credential only in
@@ -106,6 +106,26 @@ Use this sequence in the Ranch Hand interface:
 6. Treat the deployment as successful only after Ranch Hand reports a committed
    operation, ready health, and the exact immutable RepoWrangler release identity.
 
+## Complete real-mode first run
+
+Real mode opens RepoWrangler at `/onboarding`, not at Command Center. Complete
+the stages in this order:
+
+1. For Remote Linux, enter the initial setup token shown by Ranch Hand. WSL is
+   loopback-only and does not require this extra LAN handoff.
+2. Choose the administrator identity provider. GitHub requires at least one
+   administrator username; Microsoft Entra requires tenant, client, secret, and
+   at least one administrator email. The first listed identity becomes owner.
+3. Connect GitHub or GitLab estate access and choose monitored resources.
+4. Finish and complete the first successful administrator sign-in. Setup access
+   closes permanently only after that verified sign-in, so incorrect identity
+   settings remain recoverable through **Change administrator identity**.
+
+Local/private GitHub Apps are created without a webhook because GitHub cannot
+deliver to loopback or private addresses; scheduled and manual synchronization
+remain available. Microsoft Entra is offered on loopback HTTP or trusted HTTPS,
+but not on private-LAN HTTP, because Entra does not accept that redirect URI.
+
 You can use **Export JSON plan** after verification to retain the secret-free
 deployment intent for review or external automation.
 
@@ -133,9 +153,9 @@ Every guided target has a source-controlled path that works without Ranch Hand:
 
 | Ranch Hand target | Manual source recipe |
 |---|---|
-| Local or remote Docker Compose | [`deploy/docker`](https://github.com/WranglerLabs/repo-wrangler/tree/main/deploy/docker) and the v1.0.12 Compose release bundle |
-| Azure Container Apps | [`deploy/azure-container-apps`](https://github.com/WranglerLabs/repo-wrangler/tree/main/deploy/azure-container-apps) and the v1.0.12 compiled ACA bundle |
-| Cloudflare Worker + D1 | [`deploy/cloudflare`](https://github.com/WranglerLabs/repo-wrangler/tree/main/deploy/cloudflare) and the v1.0.12 built Cloudflare bundle |
+| Local or remote Docker Compose | [`deploy/docker`](https://github.com/WranglerLabs/repo-wrangler/tree/main/deploy/docker) and the selected immutable Compose release bundle |
+| Azure Container Apps | [`deploy/azure-container-apps`](https://github.com/WranglerLabs/repo-wrangler/tree/main/deploy/azure-container-apps) and the selected compiled ACA bundle |
+| Cloudflare Worker + D1 | [`deploy/cloudflare`](https://github.com/WranglerLabs/repo-wrangler/tree/main/deploy/cloudflare) and the selected built Cloudflare bundle |
 | Kubernetes or another topology not in Ranch Hand | The remaining [`deploy`](https://github.com/WranglerLabs/repo-wrangler/tree/main/deploy) recipes and user-owned CI/CD |
 
 The manual path may build from a checked-out immutable tag or consume published
@@ -160,11 +180,12 @@ release. Ranch Hand will not accept an arbitrary version or filesystem backup
 path. Every destructive cleanup rechecks Ranch Hand ownership labels and stops on
 missing or ambiguous evidence.
 
-Automated uninstall is not implemented. If an evaluation deployment must be
-removed before that lifecycle ships, follow the target-specific
-[manual removal runbook](uninstall.md). It separates retain-data and permanent
-deletion paths and requires exact ownership checks. Never delete Ranch Hand's
-local catalog merely to bypass an active installation record.
+Managed permanent uninstall is available for active WSL Compose deployments
+from **Managed deployments**. Other targets, and WSL retain-data removal, use
+the target-specific [manual removal runbook](uninstall.md). It separates
+retain-data and permanent-deletion paths and requires exact ownership checks.
+Never delete Ranch Hand's local catalog merely to bypass an active installation
+record.
 
 ## Local state and diagnostics
 

@@ -29,10 +29,12 @@ type fakeReleaseVerifier struct {
 }
 
 type fakeTargetPreflighter struct {
-	credentials adapter.Credentials
-	report      adapter.Report
-	cleaned     plan.DeploymentPlan
-	cleanupErr  error
+	credentials  adapter.Credentials
+	report       adapter.Report
+	staged       bundle.StagedBundle
+	stagedReport adapter.Report
+	cleaned      plan.DeploymentPlan
+	cleanupErr   error
 }
 
 type fakeBundleStager struct {
@@ -118,6 +120,15 @@ func (f *fakeTargetPreflighter) Preflight(_ context.Context, candidate plan.Depl
 	return adapter.Report{Ready: true, Target: candidate.Target.Kind, Checks: []adapter.Check{{Name: "native-api", OK: true, Message: "connected"}}}
 }
 
+func (f *fakeTargetPreflighter) PreflightStaged(ctx context.Context, candidate plan.DeploymentPlan, staged bundle.StagedBundle, credentials adapter.Credentials) adapter.Report {
+	f.staged = staged
+	if f.stagedReport.Checks != nil {
+		f.credentials = credentials
+		return f.stagedReport
+	}
+	return f.Preflight(ctx, candidate, credentials)
+}
+
 func (f *fakeTargetPreflighter) CleanupRemnant(_ context.Context, candidate plan.DeploymentPlan, _ adapter.Credentials) error {
 	f.cleaned = candidate
 	return f.cleanupErr
@@ -198,6 +209,9 @@ func TestCreateExportPreflightAndDryRunVerifiedPlan(t *testing.T) {
 	}
 	if targets.credentials.SSHPassword != "runtime-only" {
 		t.Fatal("target adapter did not receive runtime credential")
+	}
+	if targets.staged.Target != "local-compose" || targets.staged.Version != "v1.2.3" {
+		t.Fatal("live target preflight did not receive the staged verified bundle")
 	}
 	response = authorizedPost(h, "/api/v1/bundles/stage", string(created.Plan))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"staged":true`) {

@@ -197,7 +197,19 @@ func (s *Server) installTargetPrerequisites(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 		return
 	}
-	report := s.targets.Preflight(r.Context(), request.Plan, request.Credentials)
+	report := adapter.Report{}
+	if stagedTargets, ok := s.targets.(interface {
+		PreflightStaged(context.Context, plan.DeploymentPlan, bundle.StagedBundle, adapter.Credentials) adapter.Report
+	}); ok && s.stager != nil {
+		staged, stageErr := s.stager.Stage(verified)
+		if stageErr != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "stage verified bundle for live target preflight: " + stageErr.Error()})
+			return
+		}
+		report = stagedTargets.PreflightStaged(r.Context(), request.Plan, staged, request.Credentials)
+	} else {
+		report = s.targets.Preflight(r.Context(), request.Plan, request.Credentials)
+	}
 	report = s.annotateLifecycleTarget(request.Plan, report)
 	if report.Ready {
 		if key, err := planSessionKey(request.Plan); err == nil {

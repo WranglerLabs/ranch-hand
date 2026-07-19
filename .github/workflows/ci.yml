@@ -13,7 +13,7 @@ jobs:
   validate-go-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.x'
@@ -24,7 +24,7 @@ jobs:
   validate:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -57,7 +57,7 @@ jobs:
       IMAGE_CONFIG_DIGEST: sha256:05ecc27552403fd358dc08f7e57fcbb73ca92c335cd31e8c40f35fd3bf62d759
       RUNTIME_IMAGE: repo-wrangler-ranch-hand:v1.0.16
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download and verify immutable public artifacts
         shell: bash
         run: |

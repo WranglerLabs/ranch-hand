@@ -44,6 +44,17 @@ func (a *WSLCompose) Preflight(ctx context.Context, candidate plan.DeploymentPla
 		return report
 	}
 	appendCheck(&report, "wsl-distribution", true, "WSL distribution "+distribution+" is installed and starts without SSH.")
+	persistent, err := wslPersistenceConfigured()
+	if err != nil {
+		appendCheck(&report, "wsl-service-persistence", false, err.Error())
+		return report
+	}
+	if !persistent {
+		report.State = "prerequisites-installable"
+		appendCheck(&report, "wsl-service-persistence", false, "WSL is using finite idle shutdown defaults that stop Docker and RepoWrangler after Ranch Hand exits. Ranch Hand can configure persistent Windows WSL service hosting.")
+		return report
+	}
+	appendCheck(&report, "wsl-service-persistence", true, "Windows WSL instance and VM idle shutdown are disabled for persistent RepoWrangler service hosting.")
 	host, err := connectWSL(ctx, candidate, Credentials{})
 	if err != nil {
 		appendCheck(&report, "wsl-executor", false, err.Error())
@@ -108,6 +119,9 @@ func (a *WSLCompose) InstallPrerequisites(ctx context.Context, candidate plan.De
 	user, err := host.Run(ctx, "id -un", nil)
 	if err != nil || !remoteUserPatternForPrerequisites(user) {
 		return errors.New("Ranch Hand could not determine a safe WSL user for Docker group access")
+	}
+	if err := ensureWSLPersistence(ctx); err != nil {
+		return err
 	}
 	return installWSLDockerPrerequisites(ctx, candidate.Configuration["distribution"], user)
 }
@@ -176,6 +190,13 @@ func (a *WSLCompose) Apply(ctx context.Context, kind lifecycle.OperationKind, ca
 		// succeeds only when the project resources and installation directory are
 		// now gone, and refuses any unexpected replacement content.
 		return a.delegate.CleanupRemnant(ctx, normalized, credentials)
+	}
+	persistent, err := wslPersistenceConfigured()
+	if err != nil {
+		return err
+	}
+	if !persistent {
+		return errors.New("WSL persistent service hosting is not configured; run Ranch Hand's WSL prerequisite setup before deploying")
 	}
 	identity, err := bundle.ReadIdentity(staged)
 	if err != nil {

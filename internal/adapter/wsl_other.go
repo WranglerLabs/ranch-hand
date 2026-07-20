@@ -17,6 +17,14 @@ func connectWSL(context.Context, plan.DeploymentPlan, Credentials) (remoteHost, 
 	return nil, errors.New("WSL deployment is available only in Ranch Hand for Windows")
 }
 
+func wslPersistenceConfigured() (bool, error) {
+	return false, errors.New("WSL deployment is available only in Ranch Hand for Windows")
+}
+
+func ensureWSLPersistence(context.Context) error {
+	return errors.New("WSL persistence configuration is available only in the Windows build")
+}
+
 func installWSLDockerPrerequisites(context.Context, string, string) error {
 	return errors.New("guided WSL Docker installation is available only in the Windows build")
 }

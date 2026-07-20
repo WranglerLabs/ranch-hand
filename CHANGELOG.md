@@ -6,6 +6,13 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+### Fixed
+
+- Local WSL deployments now require persistent service hosting before apply.
+  Ranch Hand preserves existing `.wslconfig` settings while disabling the WSL
+  instance and VM idle shutdown timers, restarts WSL once to apply the change,
+  and refuses an install that would disappear when the last terminal closes.
+
 ## [0.1.0-rc.28] - 2026-07-19
 
 **Classification: Public Preview.** Publicly downloadable and intended for

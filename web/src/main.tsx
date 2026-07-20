@@ -612,7 +612,7 @@ function App() {
         if (target === "remote-linux-compose") setOperationSSHCredentials(runtimeCredentials);
         setRuntimeCredentials({});
         setCredentialEpoch((value) => value + 1);
-        setPrerequisiteMessage("Docker Engine and Compose are installed, verified, and the target is ready.");
+        setPrerequisiteMessage(target === "local-wsl-compose" ? "WSL persistent service hosting, Docker Engine, and Compose are configured, verified, and ready." : "Docker Engine and Compose are installed, verified, and the target is ready.");
       } else if (target === "local-compose") {
         setPrerequisiteMessage("Docker Desktop is installed. Start Docker Desktop, accept any required first-run terms, wait for Linux containers to start, then run live preflight again.");
       } else {

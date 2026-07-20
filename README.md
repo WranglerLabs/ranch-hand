@@ -78,6 +78,14 @@ files, defaults to the collision-resistant `repo-wrangler-ranch-hand` project,
 creates its Docker-managed data volume, binds
 `127.0.0.1:8080`, and verifies the exact release from Windows.
 
+WSL systemd services do not by themselves keep a distribution running after
+the last Windows-side WSL session exits. Ranch Hand therefore treats persistent
+service hosting as a prerequisite: it preserves existing `%USERPROFILE%\.wslconfig`
+settings, sets the WSL instance and VM idle timeouts to `-1`, restarts WSL once,
+and then verifies Docker and Compose. Apply refuses to create a deployment while
+those persistence settings are absent, so RepoWrangler does not depend on an
+open WSL terminal.
+
 The secret-free plan includes an explicit **Demo mode** toggle, defaulting to
 off. Off starts RepoWrangler with real data mode, generates unique local session
 and credential-encryption secrets, and opens the first-run provider setup flow.

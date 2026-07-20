@@ -12,11 +12,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf16"
 
 	"github.com/WranglerLabs/ranch-hand/internal/plan"
+	"golang.org/x/sys/windows"
 )
 
 func WSLDistributions(ctx context.Context) ([]string, error) {
@@ -101,6 +103,74 @@ func (h *wslHost) Health(ctx context.Context, requestPath string) (int, []byte, 
 }
 
 func (h *wslHost) Close() error { return nil }
+
+func wslPersistenceConfigured() (bool, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false, fmt.Errorf("locate Windows user profile for WSL persistence: %w", err)
+	}
+	contents, err := os.ReadFile(filepath.Join(home, ".wslconfig"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read Windows WSL configuration: %w", err)
+	}
+	return wslConfigHasPersistence(contents), nil
+}
+
+func ensureWSLPersistence(ctx context.Context) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("locate Windows user profile for WSL persistence: %w", err)
+	}
+	path := filepath.Join(home, ".wslconfig")
+	contents, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read Windows WSL configuration: %w", err)
+	}
+	patched, changed := patchWSLConfig(contents)
+	if !changed {
+		return nil
+	}
+	temporary, err := os.CreateTemp(home, ".ranch-hand-wslconfig-*")
+	if err != nil {
+		return fmt.Errorf("create temporary Windows WSL configuration: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("protect temporary Windows WSL configuration: %w", err)
+	}
+	if _, err := temporary.Write(patched); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("write temporary Windows WSL configuration: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("flush temporary Windows WSL configuration: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close temporary Windows WSL configuration: %w", err)
+	}
+	source, err := windows.UTF16PtrFromString(temporaryPath)
+	if err != nil {
+		return err
+	}
+	destination, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	if err := windows.MoveFileEx(source, destination, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH); err != nil {
+		return fmt.Errorf("commit Windows WSL persistence configuration: %w", err)
+	}
+	output, err := exec.CommandContext(ctx, "wsl.exe", "--shutdown").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("restart WSL after configuring service persistence: %w: %s", err, boundedCommandFailure(string(output)))
+	}
+	return nil
+}
 
 func installWSLDockerPrerequisites(ctx context.Context, distribution, user string) error {
 	if distribution == "" || strings.ContainsAny(distribution, "\r\n\x00") || !remoteUserPatternForPrerequisites(user) {

@@ -99,6 +99,60 @@ func TestLocalDockerInstallUsesEngineAPI(t *testing.T) {
 	if len(hostConfig["Mounts"].([]any)) != 1 {
 		t.Fatal("container create request omitted the persistent volume")
 	}
+	environment := created["Env"].([]any)
+	if !containsJSONText(environment, "DEMO_MODE=true") {
+		t.Fatal("legacy local Docker plan did not preserve demo mode")
+	}
+}
+
+func TestLocalDockerRealModeGeneratesAndPreservesSecrets(t *testing.T) {
+	candidate := localInstallPlan()
+	candidate.Configuration["demoMode"] = "false"
+	fresh, err := localContainerEnvironment(candidate, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"DEMO_MODE=false", "PUBLIC_BASE_URL=http://127.0.0.1:18080", "SESSION_SECRET=", "SECRET_ENCRYPTION_KEY="} {
+		if !containsEnvironment(fresh, expected) {
+			t.Fatalf("real-mode environment omitted %q", expected)
+		}
+	}
+	replacement, err := localContainerEnvironment(candidate, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"SESSION_SECRET", "SECRET_ENCRYPTION_KEY"} {
+		if environmentValue(replacement, key) != environmentValue(fresh, key) {
+			t.Fatalf("replacement did not preserve %s", key)
+		}
+	}
+}
+
+func containsJSONText(values []any, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func containsEnvironment(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected || strings.HasPrefix(value, expected) {
+			return true
+		}
+	}
+	return false
+}
+
+func environmentValue(values []string, key string) string {
+	for _, value := range values {
+		if strings.HasPrefix(value, key+"=") {
+			return strings.TrimPrefix(value, key+"=")
+		}
+	}
+	return ""
 }
 
 func TestLocalDockerVerifyUsesLoopbackHealth(t *testing.T) {
@@ -109,7 +163,7 @@ func TestLocalDockerVerifyUsesLoopbackHealth(t *testing.T) {
 }
 
 func TestLocalDockerHealthRejectsWrongReleaseIdentity(t *testing.T) {
-	if localHealthReady(context.Background(), localHealthClient(t, "v1.2.2"), "v1.2.3") {
+	if localHealthReady(context.Background(), localHealthClient(t, "v1.2.2"), "v1.2.3", true) {
 		t.Fatal("health verification accepted the wrong immutable release identity")
 	}
 }

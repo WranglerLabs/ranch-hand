@@ -19,7 +19,7 @@ import (
 func azureEvaluationPlan() plan.DeploymentPlan {
 	return targetPlan("azure-container-apps", map[string]string{
 		"subscriptionId": "00000000-0000-0000-0000-000000000000", "resourceGroup": "rg-ranch-hand", "location": "eastus",
-		"environmentName": "cae-ranch-hand", "appName": "repo-wrangler",
+		"environmentName": "cae-ranch-hand", "appName": "repo-wrangler", "demoMode": "false", "postgresServerName": "repo-wrangler-prod-unique",
 	})
 }
 
@@ -31,14 +31,14 @@ func stagedAzureBundle(t *testing.T) bundle.StagedBundle {
 	if err := os.WriteFile(filepath.Join(directory, "bundle.json"), []byte(identity), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	template := `{"$schema":"https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#","contentVersion":"1.0.0.0","parameters":{},"resources":[]}`
+	template := `{"$schema":"https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#","contentVersion":"1.0.0.0","parameters":{"provisionPostgres":{},"postgresServerName":{},"postgresAdminPassword":{},"sessionSecret":{},"secretEncryptionKey":{},"setupToken":{}},"resources":[]}`
 	if err := os.WriteFile(filepath.Join(directory, "main.json"), []byte(template), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return bundle.StagedBundle{Product: "RepoWrangler", Version: "v1.2.3", Target: "azure-container-apps", Path: directory}
 }
 
-func TestAzureEvaluationInstallDeploysVerifiedTemplateAndChecksIdentity(t *testing.T) {
+func TestAzureProductionInstallDeploysPostgresTemplateAndChecksIdentity(t *testing.T) {
 	var groupCreated, deploymentStarted bool
 	image := "ghcr.io/wranglerlabs/repo-wrangler-server@sha256:" + strings.Repeat("a", 64)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -65,8 +65,8 @@ func TestAzureEvaluationInstallDeploysVerifiedTemplateAndChecksIdentity(t *testi
 					Parameters map[string]map[string]any `json:"parameters"`
 				} `json:"properties"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.Properties.Template["$schema"] == nil || payload.Properties.Parameters["image"]["value"] != image || payload.Properties.Parameters["demoMode"]["value"] != true {
-				t.Fatal("ARM deployment did not bind the verified evaluation template")
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.Properties.Template["$schema"] == nil || payload.Properties.Parameters["image"]["value"] != image || payload.Properties.Parameters["demoMode"]["value"] != false || payload.Properties.Parameters["postgres"]["value"] != true || payload.Properties.Parameters["provisionPostgres"]["value"] != true || payload.Properties.Parameters["postgresServerName"]["value"] != "repo-wrangler-prod-unique" || payload.Properties.Parameters["sessionSecret"]["value"] == "" || payload.Properties.Parameters["secretEncryptionKey"]["value"] == "" || payload.Properties.Parameters["setupToken"]["value"] == "" {
+				t.Fatal("ARM deployment did not bind the verified production PostgreSQL and secret template")
 			}
 			deploymentStarted = true
 			_, _ = io.WriteString(w, `{}`)
@@ -85,19 +85,19 @@ func TestAzureEvaluationInstallDeploysVerifiedTemplateAndChecksIdentity(t *testi
 		if r.URL.Scheme != "https" || !strings.HasSuffix(r.URL.Host, ".azurecontainerapps.io") {
 			t.Fatalf("health verification escaped Azure-managed HTTPS: %s", r.URL)
 		}
-		body := `{"ok":true}`
+		body := `{"ok":true,"demoMode":false}`
 		if r.URL.Path == "/health/live" {
 			body = `{"ok":true,"version":"v1.2.3"}`
 		}
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})}
 	candidate := azureEvaluationPlan()
-	credentials := Credentials{AzureAccessToken: "azure-token"}
+	credentials := Credentials{AzureAccessToken: "azure-token", SetupToken: "abcdefghijklmnopqrstuvwxyz012345"}
 	if err := adapter.Apply(context.Background(), lifecycle.Install, candidate, "", stagedAzureBundle(t), lifecycle.OperationBackups{}, credentials); err != nil {
 		t.Fatal(err)
 	}
 	if !groupCreated || !deploymentStarted {
-		t.Fatal("Azure evaluation deployment did not create its owned boundary and ARM deployment")
+		t.Fatal("Azure production deployment did not create its owned boundary and ARM deployment")
 	}
 	if err := adapter.Verify(context.Background(), candidate, credentials); err != nil {
 		t.Fatal(err)

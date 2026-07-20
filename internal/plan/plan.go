@@ -55,6 +55,7 @@ var (
 	azureResourceGroupPattern = regexp.MustCompile(`^[A-Za-z0-9._()-]{1,90}$`)
 	azureLocationPattern      = regexp.MustCompile(`^[a-z0-9]{2,32}$`)
 	containerAppNamePattern   = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}[a-z0-9]$`)
+	postgresServerPattern     = regexp.MustCompile(`^[a-z][a-z0-9-]{1,61}[a-z0-9]$`)
 	cloudflareAccountPattern  = regexp.MustCompile(`^[a-fA-F0-9]{32}$`)
 	cloudflareWorkerPattern   = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 	cloudflareDatabasePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
@@ -67,14 +68,14 @@ var (
 var configurationFields = map[string]map[string]bool{
 	"azure-container-apps": {
 		"subscriptionId": true, "resourceGroup": true, "location": true,
-		"environmentName": true, "appName": true, "customDomain": false,
+		"environmentName": true, "appName": true, "postgresServerName": false, "customDomain": false, "demoMode": false,
 	},
 	"cloudflare": {
 		"accountId": true, "workerName": true, "databaseName": true,
-		"customDomain": false,
+		"customDomain": false, "demoMode": false,
 	},
 	"local-compose": {
-		"projectName": true, "dataVolume": true, "listenAddress": true,
+		"projectName": true, "dataVolume": true, "listenAddress": true, "demoMode": false,
 	},
 	"local-wsl-compose": {
 		"distribution": true, "projectName": true, "demoMode": false,
@@ -240,6 +241,9 @@ func (p DeploymentPlan) Validate() error {
 		}
 		if !containerAppNamePattern.MatchString(p.Configuration["environmentName"]) || !containerAppNamePattern.MatchString(p.Configuration["appName"]) {
 			return errors.New("Azure Container Apps names must use 3-32 lowercase letters, numbers, or hyphens")
+		}
+		if p.Configuration["demoMode"] == "false" && !postgresServerPattern.MatchString(p.Configuration["postgresServerName"]) {
+			return errors.New("Azure production data mode requires a globally unique PostgreSQL server name using 3-63 lowercase letters, numbers, or hyphens")
 		}
 	}
 	if p.Target.Kind == "cloudflare" {

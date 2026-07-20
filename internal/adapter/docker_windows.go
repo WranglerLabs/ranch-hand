@@ -28,7 +28,10 @@ func installDockerDesktop(ctx context.Context) error {
 	if err != nil {
 		return errors.New("Windows Package Manager (winget) is required for guided Docker Desktop installation")
 	}
-	command := exec.CommandContext(ctx, winget, "install", "--id", "Docker.DockerDesktop", "--exact", "--source", "winget", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity")
+	// Do not disable installer interaction. Docker Desktop can require an
+	// administrator approval and first-run installer UI; suppressing those
+	// prompts makes the guided action appear to do nothing.
+	command := exec.CommandContext(ctx, winget, "install", "--id", "Docker.DockerDesktop", "--exact", "--source", "winget", "--accept-package-agreements", "--accept-source-agreements")
 	output := &limitedOutput{maximum: 64 << 10}
 	command.Stdout = output
 	command.Stderr = output

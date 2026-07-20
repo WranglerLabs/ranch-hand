@@ -6,12 +6,28 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.29] - 2026-07-19
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
 ### Fixed
 
 - Local WSL deployments now require persistent service hosting before apply.
   Ranch Hand preserves existing `.wslconfig` settings while disabling the WSL
   instance and VM idle shutdown timers, restarts WSL once to apply the change,
   and refuses an install that would disappear when the last terminal closes.
+
+### Verification
+
+- On Windows 11 with WSL 2.7.8 and Ubuntu 26.04, the exact v1.0.17 deployment
+  remained running beyond the previously reproduced idle-shutdown window with
+  no WSL terminal or active WSL command.
+- Windows `/health/ready`, GitHub administrator identity save, and durable
+  identity configuration verification all returned HTTP 200 after that idle
+  window.
+- Windows and Linux Go tests, vet, web typecheck/build, public product-artifact
+  smoke, and both CodeQL analyses passed for the release source.
 
 ## [0.1.0-rc.28] - 2026-07-19
 

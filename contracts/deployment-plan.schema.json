@@ -63,7 +63,9 @@
         "resourceGroup": { "type": "string", "pattern": "^[A-Za-z0-9._()-]{1,90}$" },
         "location": { "type": "string", "pattern": "^[a-z0-9]{2,32}$" },
         "environmentName": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$" },
-        "appName": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$" }, "customDomain": { "$ref": "#/$defs/value" }
+        "appName": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$" }, "customDomain": { "$ref": "#/$defs/value" },
+        "postgresServerName": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,61}[a-z0-9]$" },
+        "demoMode": { "enum": ["true", "false"] }
       }
     },
     "cloudflare": {
@@ -71,7 +73,8 @@
       "required": ["accountId", "workerName", "databaseName"],
       "properties": {
         "accountId": { "$ref": "#/$defs/value" }, "workerName": { "$ref": "#/$defs/value" },
-        "databaseName": { "$ref": "#/$defs/value" }, "customDomain": { "$ref": "#/$defs/value" }
+        "databaseName": { "$ref": "#/$defs/value" }, "customDomain": { "$ref": "#/$defs/value" },
+        "demoMode": { "enum": ["true", "false"] }
       }
     },
     "localCompose": {
@@ -80,7 +83,8 @@
       "properties": {
         "projectName": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$" },
         "dataVolume": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$" },
-        "listenAddress": { "type": "string", "pattern": "^127\\.0\\.0\\.1:[0-9]{4,5}$" }
+        "listenAddress": { "type": "string", "pattern": "^127\\.0\\.0\\.1:[0-9]{4,5}$" },
+        "demoMode": { "enum": ["true", "false"] }
       }
     },
     "localWSLCompose": {

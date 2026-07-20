@@ -52,7 +52,9 @@ func writeCloudflareResult(w http.ResponseWriter, result string) {
 	_, _ = io.WriteString(w, `{"success":true,"result":`+result+`}`)
 }
 
-func TestCloudflareEvaluationInstallUsesNativeAPIsAndVerifiesIdentity(t *testing.T) {
+func TestCloudflareProductionDataInstallUsesNativeAPIsAndVerifiesIdentity(t *testing.T) {
+	candidate := cloudflareEvaluationPlan()
+	candidate.Configuration["demoMode"] = "false"
 	var databaseCreated, markerWritten, migrationApplied, assetsUploaded, workerUploaded, schedulesUpdated, subdomainEnabled bool
 	var assetHash string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -84,7 +86,7 @@ func TestCloudflareEvaluationInstallUsesNativeAPIsAndVerifiesIdentity(t *testing
 			}
 			switch {
 			case strings.Contains(query.SQL, "_ranch_hand_installation") && strings.HasPrefix(query.SQL, "SELECT"):
-				deploymentID, _ := lifecycle.DeploymentID(cloudflareEvaluationPlan())
+				deploymentID, _ := lifecycle.DeploymentID(candidate)
 				writeCloudflareResult(w, `[{"success":true,"results":[{"deployment_id":"`+deploymentID+`","release_version":"v1.2.3"}]}]`)
 			case strings.Contains(query.SQL, "_ranch_hand_installation"):
 				markerWritten = true
@@ -137,13 +139,18 @@ func TestCloudflareEvaluationInstallUsesNativeAPIsAndVerifiesIdentity(t *testing
 			if err := json.Unmarshal([]byte(r.MultipartForm.Value["metadata"][0]), &metadata); err != nil || metadata.Assets.JWT != "completion-jwt" || metadata.CompatibilityDate != "2026-07-01" {
 				t.Fatal("Worker metadata did not bind the verified release contract")
 			}
-			var d1, version bool
+			var d1, version, realMode bool
+			secrets := map[string]bool{}
 			for _, binding := range metadata.Bindings {
 				d1 = d1 || (binding.Type == "d1" && binding.DatabaseID == cloudflareTestDatabaseID)
 				version = version || (binding.Type == "plain_text" && binding.Name == "APP_VERSION" && binding.Text == "v1.2.3")
+				realMode = realMode || (binding.Type == "plain_text" && binding.Name == "DEMO_MODE" && binding.Text == "false")
+				if binding.Type == "secret_text" && binding.Text != "" {
+					secrets[binding.Name] = true
+				}
 			}
-			if !d1 || !version || len(r.MultipartForm.File["worker.js"]) != 1 {
-				t.Fatal("Worker upload omitted D1, version, or module")
+			if !d1 || !version || !realMode || !secrets["SESSION_SECRET"] || !secrets["SECRET_ENCRYPTION_KEY"] || !secrets["SETUP_TOKEN"] || len(r.MultipartForm.File["worker.js"]) != 1 {
+				t.Fatal("Worker upload omitted its production data, secret, D1, version, or module contract")
 			}
 			workerUploaded = true
 			writeCloudflareResult(w, `{"id":"repo-wrangler"}`)
@@ -160,7 +167,7 @@ func TestCloudflareEvaluationInstallUsesNativeAPIsAndVerifiesIdentity(t *testing
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/workers/scripts/repo-wrangler/subdomain"):
 			writeCloudflareResult(w, `{"enabled":true,"previews_enabled":false}`)
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/settings"):
-			writeCloudflareResult(w, `{"compatibility_date":"2026-07-01","bindings":[{"type":"assets","name":"ASSETS"},{"type":"d1","name":"DB","database_id":"`+cloudflareTestDatabaseID+`"},{"type":"plain_text","name":"ALLOWED_GITHUB_USERS","text":""},{"type":"plain_text","name":"APP_VERSION","text":"v1.2.3"},{"type":"plain_text","name":"AUTH_MODE","text":"github_app"},{"type":"plain_text","name":"DEMO_MODE","text":"true"}]}`)
+			writeCloudflareResult(w, `{"compatibility_date":"2026-07-01","bindings":[{"type":"assets","name":"ASSETS"},{"type":"d1","name":"DB","database_id":"`+cloudflareTestDatabaseID+`"},{"type":"plain_text","name":"ALLOWED_GITHUB_USERS","text":""},{"type":"plain_text","name":"APP_VERSION","text":"v1.2.3"},{"type":"plain_text","name":"AUTH_MODE","text":"github_app"},{"type":"plain_text","name":"DEMO_MODE","text":"false"},{"type":"secret_text","name":"SESSION_SECRET"},{"type":"secret_text","name":"SECRET_ENCRYPTION_KEY"},{"type":"secret_text","name":"SETUP_TOKEN"}]}`)
 		default:
 			t.Fatalf("unexpected Cloudflare request: %s %s", r.Method, r.URL.String())
 		}
@@ -171,19 +178,18 @@ func TestCloudflareEvaluationInstallUsesNativeAPIsAndVerifiesIdentity(t *testing
 		if r.URL.Host != "repo-wrangler.wranglerlabs.workers.dev" || r.URL.Scheme != "https" {
 			t.Fatalf("health check escaped Cloudflare-managed HTTPS: %s", r.URL)
 		}
-		body := `{"ok":true}`
+		body := `{"ok":true,"demoMode":false}`
 		if r.URL.Path == "/health/live" {
 			body = `{"ok":true,"version":"v1.2.3"}`
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 	})}
-	candidate := cloudflareEvaluationPlan()
-	credentials := Credentials{CloudflareAPIToken: "cf-token"}
+	credentials := Credentials{CloudflareAPIToken: "cf-token", SetupToken: "abcdefghijklmnopqrstuvwxyz012345"}
 	if err := adapter.Apply(context.Background(), lifecycle.Install, candidate, "", stagedCloudflareBundle(t), lifecycle.OperationBackups{}, credentials); err != nil {
 		t.Fatal(err)
 	}
 	if !databaseCreated || !markerWritten || !migrationApplied || !assetsUploaded || !workerUploaded || !schedulesUpdated || !subdomainEnabled {
-		t.Fatal("Cloudflare evaluation install did not complete every native API phase")
+		t.Fatal("Cloudflare production-data install did not complete every native API phase")
 	}
 	if err := adapter.Verify(context.Background(), candidate, credentials); err != nil {
 		t.Fatal(err)

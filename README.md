@@ -2,7 +2,7 @@
 
 Ranch Hand is the standalone, Windows-first lifecycle manager for [RepoWrangler](https://github.com/WranglerLabs/repo-wrangler). It is for operators who want to install and manage RepoWrangler without cloning or forking its source repository. Contributors and advanced operators can still use RepoWrangler's documented deployment recipes directly.
 
-> **Status: Public Preview.** [`v0.1.0-rc.29`](docs/releases/v0.1.0-rc.29.md)
+> **Status: Public Preview.** [`v0.1.0-rc.30`](docs/releases/v0.1.0-rc.30.md)
 > is the primary recommended Windows deployment path for RepoWrangler. It is
 > publicly downloadable and functional, but it is unsigned and not production
 > supported or generally available. See the complete [GA readiness
@@ -13,7 +13,7 @@ Ranch Hand is the standalone, Windows-first lifecycle manager for [RepoWrangler]
 - **Recommended — use the Public Preview:** use the public
   [Ranch Hand for Windows guide](https://wranglerlabs.org/ranch-hand) to download
   stable unsigned preview asset, verify it, launch it, and complete a
-  supported evaluation deployment. A GitHub account is not required.
+  supported production-data or optional demo deployment. A GitHub account is not required.
 - **Wait for the signed GA installer:** the first signed stable release remains
   gated on Authenticode signing and clean-Windows/real-target UAT.
 - **Manual alternative:** clone or fork
@@ -99,7 +99,7 @@ streams it directly into the selected WSL Docker Engine. Compose uses only that
 loaded image with `pull_policy: never`; the WSL install does not contact GHCR
 and does not require a GitHub account, registry login, or token.
 
-Every active evaluation deployment appears in **Managed deployments** with an
+Every active managed deployment appears in **Managed deployments** with an
 explicit data-deletion confirmation and **Permanently remove deployment**
 action. Managed removal covers Docker Desktop, WSL Compose, remote Linux
 Compose, Azure Container Apps, and Cloudflare Worker plus D1. Each adapter
@@ -114,11 +114,11 @@ only resources whose marker, transferred-file hashes, and Docker labels prove
 exact ownership. A committed installation is reported as already installed;
 an unknown directory remains blocked and untouched.
 
-## Local Docker Desktop evaluation install
+## Local Docker Desktop install
 
-If Docker Desktop is absent, Ranch Hand offers an explicit prerequisite action that installs it through Windows Package Manager. Docker Desktop may still require an administrator prompt, acceptance of its first-run terms, and startup of the Linux-container engine. After the exact plan passes live Docker preflight and its verified bundle is safely staged, Ranch Hand can install the Docker Desktop profile as a single loopback-only evaluation container. It downloads the release's independently published image archive, verifies its pinned size and SHA-256, loads it through Docker Desktop's Windows-exposed Docker Engine API, and verifies the loaded immutable image ID before creating anything. It then creates or verifies an ownership-labeled persistent Docker volume, labels the container with its Ranch Hand deployment identity, starts it, and verifies `/health/ready` through a fixed loopback-only client. No registry login, host filesystem path, repository clone, Docker CLI, shell, proxy, or public ingress is involved.
+If Docker Desktop is absent, Ranch Hand offers an explicit prerequisite action that installs it through Windows Package Manager. Docker Desktop may still require an administrator prompt, acceptance of its first-run terms, and startup of the Linux-container engine. Ranch Hand leaves those required interactions visible and reports installation progress or failure in the interface. After the exact plan passes live Docker preflight and its verified bundle is safely staged, Ranch Hand installs a single loopback-only container. It downloads the release's independently published image archive, verifies its pinned size and SHA-256, loads it through Docker Desktop's Windows-exposed Docker Engine API, and verifies the loaded immutable image ID before creating anything. It then creates or verifies an ownership-labeled persistent Docker volume, labels the container with its Ranch Hand deployment identity, starts it, and verifies `/health/ready` through a fixed loopback-only client. No registry login, host filesystem path, repository clone, Docker CLI, shell, proxy, or public ingress is involved.
 
-The interface requires an explicit confirmation and describes the current boundary before mutation. This path enables demo mode, SQLite, and GitHub authentication; it is not a production configuration. A partially failed install can remove only the exact container carrying Ranch Hand's matching ownership labels. Ranch Hand refuses to replace or recover an unowned container with the selected name.
+Production data mode is the default. Ranch Hand generates unique session and credential-encryption secrets, stores them only in the container environment, preserves them across backup-first lifecycle replacements, and opens protected first-run provider onboarding. The plan remains secret-free. Demo mode is an explicit opt-in that uses mock data. Ranch Hand verifies the reported mode before committing the lifecycle operation. A partially failed install can remove only the exact container carrying Ranch Hand's matching ownership labels; an unowned same-named container remains protected.
 
 The same coordinator can create a consistent local backup. Ranch Hand verifies the container and volume ownership labels, briefly stops the running container, streams `/app/data` through Docker's native archive API into its user-scoped backup directory, syncs and hashes the archive, restarts the container, and waits for readiness. The secret-free inventory records the relative locator, byte count, SHA-256, deployment, operation, and release. Local archives have a 64 GiB safety limit; a stopped container remains stopped.
 

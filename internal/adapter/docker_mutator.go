@@ -124,7 +124,11 @@ func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, c
 	if err := d.ensureManagedVolume(ctx, dataVolume, deploymentID); err != nil {
 		return err
 	}
-	_, err = d.createContainer(ctx, candidate, runtimeImage, dataVolume, containerName, deploymentID, hostIP, hostPort, true)
+	environment, err := localContainerEnvironment(candidate, nil)
+	if err != nil {
+		return err
+	}
+	_, err = d.createContainer(ctx, candidate, runtimeImage, dataVolume, containerName, deploymentID, hostIP, hostPort, environment, true)
 	return err
 }
 
@@ -155,10 +159,10 @@ func (d *LocalDocker) removeOwnedDeployment(ctx context.Context, candidate plan.
 	return nil
 }
 
-func (d *LocalDocker) createContainer(ctx context.Context, candidate plan.DeploymentPlan, image, dataVolume, containerName, deploymentID, hostIP, hostPort string, start bool) (string, error) {
+func (d *LocalDocker) createContainer(ctx context.Context, candidate plan.DeploymentPlan, image, dataVolume, containerName, deploymentID, hostIP, hostPort string, environment []string, start bool) (string, error) {
 	payload := map[string]any{
 		"Image":        image,
-		"Env":          []string{"PORT=8080", "DEMO_MODE=true", "AUTH_PROVIDERS=github", "ENABLE_SCHEDULER=true", "SQLITE_PATH=/app/data/repo-wrangler.db", "APP_VERSION=" + candidate.Release.Version},
+		"Env":          environment,
 		"ExposedPorts": map[string]any{"8080/tcp": map[string]any{}},
 		"Labels": map[string]string{
 			"com.wranglerlabs.ranch-hand.managed": "true", "com.wranglerlabs.ranch-hand.deployment": deploymentID,
@@ -186,6 +190,46 @@ func (d *LocalDocker) createContainer(ctx context.Context, candidate plan.Deploy
 		}
 	}
 	return created.ID, nil
+}
+
+func localContainerEnvironment(candidate plan.DeploymentPlan, existing []string) ([]string, error) {
+	demoMode := candidate.Configuration["demoMode"]
+	if demoMode == "" {
+		// Preserve the meaning and lifecycle identity of plans created before
+		// Docker Desktop exposed an operating-mode choice.
+		demoMode = "true"
+	}
+	environment := []string{
+		"PORT=8080",
+		"DEMO_MODE=" + demoMode,
+		"AUTH_PROVIDERS=github",
+		"ENABLE_SCHEDULER=true",
+		"SQLITE_PATH=/app/data/repo-wrangler.db",
+		"APP_VERSION=" + candidate.Release.Version,
+		"PUBLIC_BASE_URL=http://" + candidate.Configuration["listenAddress"],
+	}
+	if demoMode == "true" {
+		return environment, nil
+	}
+	values := make(map[string]string, len(existing))
+	for _, entry := range existing {
+		key, value, found := strings.Cut(entry, "=")
+		if found {
+			values[key] = value
+		}
+	}
+	for _, key := range []string{"SESSION_SECRET", "SECRET_ENCRYPTION_KEY"} {
+		value := values[key]
+		if value == "" {
+			generated, err := randomEnvironmentSecret()
+			if err != nil {
+				return nil, fmt.Errorf("generate Docker Desktop %s: %w", strings.ToLower(strings.ReplaceAll(key, "_", " ")), err)
+			}
+			value = generated
+		}
+		environment = append(environment, key+"="+value)
+	}
+	return environment, nil
 }
 
 func (d *LocalDocker) applyReplacement(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, fromVersion string, backups lifecycle.OperationBackups, image, deploymentID, project, hostIP, hostPort string) error {
@@ -266,7 +310,11 @@ func (d *LocalDocker) applyReplacement(ctx context.Context, kind lifecycle.Opera
 	if err := d.renameContainer(ctx, current.ID, rollbackName); err != nil {
 		return err
 	}
-	createdID, err := d.createContainer(ctx, candidate, runtimeImage, candidateVolume, containerName, deploymentID, hostIP, hostPort, false)
+	environment, err := localContainerEnvironment(candidate, current.Environment)
+	if err != nil {
+		return err
+	}
+	createdID, err := d.createContainer(ctx, candidate, runtimeImage, candidateVolume, containerName, deploymentID, hostIP, hostPort, environment, false)
 	if err != nil {
 		return err
 	}
@@ -358,8 +406,9 @@ func (d *LocalDocker) verifyVersion(ctx context.Context, candidate plan.Deployme
 	defer cancel()
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	expectedDemo := candidate.Configuration["demoMode"] != "false"
 	for {
-		if localHealthReady(deadline, client, expectedVersion) {
+		if localHealthReady(deadline, client, expectedVersion, expectedDemo) {
 			return nil
 		}
 		select {
@@ -370,7 +419,7 @@ func (d *LocalDocker) verifyVersion(ctx context.Context, candidate plan.Deployme
 	}
 }
 
-func localHealthReady(ctx context.Context, client *http.Client, expectedVersion string) bool {
+func localHealthReady(ctx context.Context, client *http.Client, expectedVersion string, expectedDemo bool) bool {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1/health/ready", nil)
 	if err != nil {
 		return false
@@ -380,10 +429,11 @@ func localHealthReady(ctx context.Context, client *http.Client, expectedVersion 
 		return false
 	}
 	var ready struct {
-		OK bool `json:"ok"`
+		OK       bool `json:"ok"`
+		DemoMode bool `json:"demoMode"`
 	}
 	decodeErr := decodeHealthResponse(response, &ready)
-	if decodeErr != nil || !ready.OK {
+	if decodeErr != nil || !ready.OK || ready.DemoMode != expectedDemo {
 		return false
 	}
 	request, err = http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1/health/live", nil)
@@ -536,10 +586,11 @@ func (d *LocalDocker) startAndVerify(ctx context.Context, metadata dockerContain
 var errDockerNotFound = errors.New("Docker resource not found")
 
 type dockerContainer struct {
-	ID         string
-	Labels     map[string]string
-	Running    bool
-	DataVolume string
+	ID          string
+	Labels      map[string]string
+	Environment []string
+	Running     bool
+	DataVolume  string
 }
 
 func (d *LocalDocker) ensureManagedVolume(ctx context.Context, name, deploymentID string) error {
@@ -627,6 +678,7 @@ func (d *LocalDocker) containerMetadata(ctx context.Context, name string) (bool,
 		ID     string `json:"Id"`
 		Config struct {
 			Labels map[string]string `json:"Labels"`
+			Env    []string          `json:"Env"`
 		} `json:"Config"`
 		State struct {
 			Running bool `json:"Running"`
@@ -647,7 +699,7 @@ func (d *LocalDocker) containerMetadata(ctx context.Context, name string) (bool,
 	if details.ID == "" {
 		return false, dockerContainer{}, errors.New("Docker Engine returned a container without an identity")
 	}
-	metadata := dockerContainer{ID: details.ID, Labels: details.Config.Labels, Running: details.State.Running}
+	metadata := dockerContainer{ID: details.ID, Labels: details.Config.Labels, Environment: details.Config.Env, Running: details.State.Running}
 	for _, mount := range details.Mounts {
 		if mount.Type == "volume" && mount.Destination == "/app/data" {
 			metadata.DataVolume = mount.Name

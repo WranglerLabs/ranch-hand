@@ -12,24 +12,24 @@ its [manual deployment recipes](https://github.com/WranglerLabs/repo-wrangler/tr
 
 ## Current availability
 
-There is no signed GA Ranch Hand installer yet. `v0.1.0-rc.29` is an unsigned
+There is no signed GA Ranch Hand installer yet. `v0.1.0-rc.30` is an unsigned
 Public Preview published as a stable prerelease download. It is intended for
 evaluation and feedback, not production support.
 
-Use it only on an explicitly authorized evaluation target. Windows SmartScreen or
+Use it only on an explicitly authorized target. Windows SmartScreen or
 organizational application-control policy may warn or block it. Do not bypass an
 organizational security policy.
 
 ## Download and verify the Public Preview
 
 1. Open the public [Ranch Hand for Windows guide](https://wranglerlabs.org/ranch-hand)
-   and select **Download Ranch Hand v0.1.0-rc.29 for Windows (64-bit)**. A GitHub
+   and select **Download Ranch Hand v0.1.0-rc.30 for Windows (64-bit)**. A GitHub
    account is not required.
 2. In PowerShell, verify the executable before running it:
 
    ```powershell
-   Get-FileHash .\ranch-hand-v0.1.0-rc.29-windows-amd64.exe -Algorithm SHA256
-   Get-AuthenticodeSignature .\ranch-hand-v0.1.0-rc.29-windows-amd64.exe
+   Get-FileHash .\ranch-hand-v0.1.0-rc.30-windows-amd64.exe -Algorithm SHA256
+   Get-AuthenticodeSignature .\ranch-hand-v0.1.0-rc.30-windows-amd64.exe
    ```
 
    Compare the result with the `.sha256` file published beside the executable
@@ -40,7 +40,7 @@ organizational security policy.
 3. For optional GitHub provenance verification, install GitHub CLI and run:
 
    ```powershell
-   gh attestation verify .\ranch-hand-v0.1.0-rc.29-windows-amd64.exe `
+   gh attestation verify .\ranch-hand-v0.1.0-rc.30-windows-amd64.exe `
      --repo WranglerLabs/ranch-hand
    ```
 
@@ -49,7 +49,7 @@ Windows code-signing certificate.
 
 ## Launch Ranch Hand
 
-Double-click `ranch-hand-v0.1.0-rc.29-windows-amd64.exe`, or start it from
+Double-click `ranch-hand-v0.1.0-rc.30-windows-amd64.exe`, or start it from
 PowerShell. Ranch Hand binds a random port on `127.0.0.1`, opens the interface in
 your default browser, and protects that browser session with a random one-time
 launch token.
@@ -62,15 +62,15 @@ that tab's session storage after Ranch Hand removes it from the address bar.
 
 ## Choose a target
 
-All five Preview adapters create **new evaluation deployments**. They do not adopt an
-existing environment.
+All five Preview adapters create **new production-data deployments by default**.
+Demo mode is an explicit opt-in. They do not adopt an existing environment.
 
 | Target | What you need | Current boundary |
 |---|---|---|
 | Local Docker Compose — WSL | An installed WSL2 Ubuntu/Debian distribution | Ranch Hand configures the Windows user-scoped WSL instance and VM idle timeouts for persistent service hosting, preserving other `.wslconfig` settings and restarting WSL once. If Engine or Compose is missing, Ranch Hand installs it inside WSL, starts Docker, grants the WSL user access, and reruns preflight. **Demo mode** is an explicit toggle and defaults off. Off generates protected local secrets and opens real first-run provider setup at `http://127.0.0.1:8080/onboarding`; on uses mock data. Ranch Hand verifies and loads the selected immutable release's public image archive with pulls disabled. Docker Desktop, SSH, an open WSL terminal, a WSL IP, filesystem path, GitHub account, token, and registry login are not required. |
-| Local Docker Desktop | Windows Package Manager, or an already installed Docker Desktop running Linux containers | If unavailable, Ranch Hand offers to install Docker Desktop through `winget`; administrator approval, first-run terms, and startup may still be required. Ranch Hand verifies the selected immutable release's public image archive, loads it through the Windows Docker API, and confirms its image ID; no registry login is required. The deployment is loopback-only demo/SQLite. Full backup, update, restore, rollback, repair, recovery, and rollback-pool retention are available. |
-| Azure Container Apps | An Azure subscription, permission to create a dedicated resource group and ACA resources, and a temporary ARM access token | Staged preflight anonymously pulls and hashes the exact digest-pinned release manifest before any resource creation. The install uses a new resource group, demo mode, SQLite on Azure Files, and Azure-managed HTTPS. Resources can incur Azure charges. Existing groups, PostgreSQL, production credentials, custom domains, and update are not enabled. |
-| Cloudflare | Account ID, unused Worker and D1 names, a workers.dev subdomain, and a scoped API token with account read, Workers Scripts write, and D1 write access | New Worker and D1 database in demo mode with Cloudflare-managed workers.dev HTTPS. Existing resources, custom domains, production secrets, backup, and update are not enabled. |
+| Local Docker Desktop | Windows Package Manager, or an already installed Docker Desktop running Linux containers | If unavailable, Ranch Hand offers to install Docker Desktop through `winget`; administrator approval, first-run terms, and startup remain visible when required. Ranch Hand verifies and loads the selected immutable image archive through the Windows Docker API. Production data mode defaults on, generates and preserves protected secrets, uses persistent SQLite, and opens loopback onboarding. Demo mode is opt-in. Full backup, update, restore, rollback, repair, recovery, and rollback-pool retention are available. |
+| Azure Container Apps | An Azure subscription, permission to create a dedicated resource group, Container Apps resources, and Azure Database for PostgreSQL, plus a temporary ARM access token | Production data mode requires RepoWrangler v1.0.18 or newer and provisions a dedicated PostgreSQL flexible server, generated secure Container App secrets, a one-time setup token, and Azure-managed HTTPS. Ranch Hand verifies the digest-pinned public image and exact reported mode. Demo mode explicitly selects SQLite on Azure Files and mock data. Resources are billable; existing groups, custom domains, backup, and update are not enabled. |
+| Cloudflare | Account ID, unused Worker and D1 names, a workers.dev subdomain, and a scoped API token with account read, Workers Scripts write, and D1 write access | Production data mode defaults on and creates a dedicated Worker and D1 database, generated secret bindings, a one-time setup token, and Cloudflare-managed HTTPS. Ranch Hand verifies the exact Worker variables, secret-binding names, persistent D1 identity, release, and reported mode. Demo mode is opt-in. Existing resources, custom domains, backup, and update are not enabled. |
 | Remote Linux Docker Compose | Existing Ubuntu/Debian host at an explicit private IPv4 address and an SSH password or private key; sudo is needed only when Docker prerequisites are missing | If Engine or Compose is missing, Ranch Hand offers a bounded sudo-backed install, starts Docker, grants the user access, and reruns preflight. Ranch Hand verifies the public image archive on Windows, streams it to Docker over the pinned SSH connection, verifies the loaded image ID, and disables registry pulls. The target needs no GitHub account, GHCR login, token, or registry access. SSH port and project are prefilled; entering the user fills its default installation directory. The successful credential is reused for installation only in memory. The project publishes port 8080 on the selected private address, and Ranch Hand verifies `http://<private-ip>:8080` from Windows before reporting success. Real mode also generates a one-time setup token, writes it only to the protected remote environment, and shows it in the committed result. Ranch Hand does not install public ingress, a proxy, or Linux. Backup and update are not enabled. |
 
 Azure, Cloudflare, and Remote Linux credentials are entered once for live

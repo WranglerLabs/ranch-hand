@@ -63,6 +63,7 @@ type cloudflareAsset struct {
 type cloudflareExpected struct {
 	DatabaseID string
 	Identity   bundle.Identity
+	Secrets    []string
 }
 
 func (c *Cloudflare) Backup(context.Context, plan.DeploymentPlan, string, Credentials) (lifecycle.BackupArtifact, error) {
@@ -77,7 +78,7 @@ func (c *Cloudflare) Apply(ctx context.Context, kind lifecycle.OperationKind, ca
 		return c.removeOwnedDeployment(ctx, candidate, credentials)
 	}
 	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
-		return errors.New("the Cloudflare adapter currently supports only a new evaluation install")
+		return errors.New("the Cloudflare adapter currently supports only a new installation")
 	}
 	if err := candidate.Validate(); err != nil {
 		return err
@@ -97,6 +98,26 @@ func (c *Cloudflare) Apply(ctx context.Context, kind lifecycle.OperationKind, ca
 	}
 	if staged.Target != "cloudflare" {
 		return errors.New("Cloudflare adapter requires a cloudflare bundle")
+	}
+	identity.Vars = cloneStringMap(identity.Vars)
+	demoMode := candidate.Configuration["demoMode"]
+	if demoMode == "" {
+		demoMode = "true"
+	}
+	identity.Vars["DEMO_MODE"] = demoMode
+	secrets := map[string]string{}
+	if demoMode == "false" {
+		if !remoteSetupTokenPattern.MatchString(credentials.SetupToken) {
+			return errors.New("Cloudflare production-data installation requires a generated 32-256 character setup token")
+		}
+		for _, name := range []string{"SESSION_SECRET", "SECRET_ENCRYPTION_KEY"} {
+			value, secretErr := randomEnvironmentSecret()
+			if secretErr != nil {
+				return fmt.Errorf("generate Cloudflare %s: %w", strings.ToLower(strings.ReplaceAll(name, "_", " ")), secretErr)
+			}
+			secrets[name] = value
+		}
+		secrets["SETUP_TOKEN"] = credentials.SetupToken
 	}
 
 	account, worker, database := cloudflareNames(candidate)
@@ -126,7 +147,7 @@ func (c *Cloudflare) Apply(ctx context.Context, kind lifecycle.OperationKind, ca
 	if err != nil {
 		return fmt.Errorf("upload verified Worker assets: %w", err)
 	}
-	if err := c.uploadWorker(ctx, account, worker, created.UUID, deploymentID, completionToken, staged, identity, headers); err != nil {
+	if err := c.uploadWorker(ctx, account, worker, created.UUID, deploymentID, completionToken, staged, identity, secrets, headers); err != nil {
 		return fmt.Errorf("upload verified Worker module: %w", err)
 	}
 	if err := c.updateSchedules(ctx, account, worker, identity.Crons, headers); err != nil {
@@ -135,7 +156,12 @@ func (c *Cloudflare) Apply(ctx context.Context, kind lifecycle.OperationKind, ca
 	if err := c.enableWorkersDev(ctx, account, worker, headers); err != nil {
 		return fmt.Errorf("enable Cloudflare-managed HTTPS endpoint: %w", err)
 	}
-	c.rememberExpected(deploymentID, created.UUID, identity)
+	secretNames := make([]string, 0, len(secrets))
+	for name := range secrets {
+		secretNames = append(secretNames, name)
+	}
+	sort.Strings(secretNames)
+	c.rememberExpected(deploymentID, created.UUID, identity, secretNames)
 	return nil
 }
 
@@ -171,7 +197,7 @@ func (c *Cloudflare) removeOwnedDeployment(ctx context.Context, candidate plan.D
 		if status < 200 || status >= 300 {
 			return errors.New("owned Worker identity could not be inspected for uninstall")
 		}
-		if err := c.verifyWorkerSettings(ctx, account, worker, databases[0].UUID, candidate.Release.Version, nil, headers); err != nil {
+		if err := c.verifyWorkerSettings(ctx, account, worker, databases[0].UUID, candidate.Release.Version, nil, nil, headers); err != nil {
 			return errors.New("refusing to delete a Worker that does not match the owned deployment")
 		}
 		if err := c.cloudflareJSON(ctx, http.MethodDelete, c.baseURL+"/accounts/"+account+"/workers/scripts/"+worker, headers, nil, nil); err != nil {
@@ -185,10 +211,10 @@ func (c *Cloudflare) removeOwnedDeployment(ctx context.Context, candidate plan.D
 	return nil
 }
 
-func (c *Cloudflare) rememberExpected(deploymentID, databaseID string, identity bundle.Identity) {
+func (c *Cloudflare) rememberExpected(deploymentID, databaseID string, identity bundle.Identity, secrets []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.expected[deploymentID] = cloudflareExpected{DatabaseID: databaseID, Identity: identity}
+	c.expected[deploymentID] = cloudflareExpected{DatabaseID: databaseID, Identity: identity, Secrets: secrets}
 }
 
 func (c *Cloudflare) expectedDeployment(deploymentID string) (cloudflareExpected, bool) {
@@ -441,7 +467,7 @@ func (c *Cloudflare) uploadAssetBucket(ctx context.Context, account, uploadToken
 	return c.cloudflareMultipart(ctx, http.MethodPost, destination, uploadToken, writer.FormDataContentType(), &body, output)
 }
 
-func (c *Cloudflare) uploadWorker(ctx context.Context, account, worker, databaseID, deploymentID, completionToken string, staged bundle.StagedBundle, identity bundle.Identity, headers map[string]string) error {
+func (c *Cloudflare) uploadWorker(ctx context.Context, account, worker, databaseID, deploymentID, completionToken string, staged bundle.StagedBundle, identity bundle.Identity, secrets map[string]string, headers map[string]string) error {
 	workerContents, err := readBoundedFile(filepath.Join(staged.Path, identity.Worker), maximumCloudflareWorker)
 	if err != nil {
 		return err
@@ -457,6 +483,14 @@ func (c *Cloudflare) uploadWorker(ctx context.Context, account, worker, database
 	sort.Strings(keys)
 	for _, key := range keys {
 		bindings = append(bindings, map[string]any{"name": key, "text": identity.Vars[key], "type": "plain_text"})
+	}
+	secretNames := make([]string, 0, len(secrets))
+	for name := range secrets {
+		secretNames = append(secretNames, name)
+	}
+	sort.Strings(secretNames)
+	for _, name := range secretNames {
+		bindings = append(bindings, map[string]any{"name": name, "text": secrets[name], "type": "secret_text"})
 	}
 	metadata := map[string]any{
 		"main_module":        identity.Worker,
@@ -591,7 +625,7 @@ func (c *Cloudflare) Verify(ctx context.Context, candidate plan.DeploymentPlan, 
 	if err := c.verifyOwnershipMarker(ctx, account, databases[0].UUID, deploymentID, candidate.Release.Version, headers); err != nil {
 		return err
 	}
-	if err := c.verifyWorkerSettings(ctx, account, worker, databases[0].UUID, candidate.Release.Version, &expected.Identity, headers); err != nil {
+	if err := c.verifyWorkerSettings(ctx, account, worker, databases[0].UUID, candidate.Release.Version, &expected.Identity, expected.Secrets, headers); err != nil {
 		return err
 	}
 	if err := c.verifySchedules(ctx, account, worker, expected.Identity.Crons, headers); err != nil {
@@ -613,7 +647,7 @@ func (c *Cloudflare) Verify(ctx context.Context, candidate plan.DeploymentPlan, 
 	if !cloudflareManagedHostname.MatchString(hostname) {
 		return errors.New("Cloudflare returned an invalid managed workers.dev hostname")
 	}
-	return c.verifyManagedHTTPS(ctx, hostname, candidate.Release.Version)
+	return c.verifyManagedHTTPS(ctx, hostname, candidate.Release.Version, candidate.Configuration["demoMode"] != "false")
 }
 
 func (c *Cloudflare) verifyOwnershipMarker(ctx context.Context, account, databaseID, deploymentID, version string, headers map[string]string) error {
@@ -634,7 +668,7 @@ func (c *Cloudflare) verifyOwnershipMarker(ctx context.Context, account, databas
 	return nil
 }
 
-func (c *Cloudflare) verifyWorkerSettings(ctx context.Context, account, worker, databaseID, version string, expected *bundle.Identity, headers map[string]string) error {
+func (c *Cloudflare) verifyWorkerSettings(ctx context.Context, account, worker, databaseID, version string, expected *bundle.Identity, expectedSecrets []string, headers map[string]string) error {
 	var settings struct {
 		Bindings []struct {
 			Type       string `json:"type"`
@@ -650,12 +684,16 @@ func (c *Cloudflare) verifyWorkerSettings(ctx context.Context, account, worker, 
 	}
 	var d1Match, versionMatch, assetsMatch bool
 	plainText := make(map[string]string)
+	secretNames := make(map[string]bool)
 	for _, binding := range settings.Bindings {
 		d1Match = d1Match || (binding.Type == "d1" && binding.Name == "DB" && binding.DatabaseID == databaseID)
 		versionMatch = versionMatch || (binding.Type == "plain_text" && binding.Name == "APP_VERSION" && binding.Text == version)
 		assetsMatch = assetsMatch || (binding.Type == "assets" && binding.Name == "ASSETS")
 		if binding.Type == "plain_text" {
 			plainText[binding.Name] = binding.Text
+		}
+		if binding.Type == "secret_text" {
+			secretNames[binding.Name] = true
 		}
 	}
 	if !d1Match || !versionMatch || settings.CompatibilityDate == "" {
@@ -670,8 +708,21 @@ func (c *Cloudflare) verifyWorkerSettings(ctx context.Context, account, worker, 
 				return errors.New("Worker variables do not match the verified evaluation contract")
 			}
 		}
+		for _, name := range expectedSecrets {
+			if !secretNames[name] {
+				return fmt.Errorf("Worker secret binding %s is missing", name)
+			}
+		}
 	}
 	return nil
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	cloned := make(map[string]string, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func (c *Cloudflare) verifySchedules(ctx context.Context, account, worker string, expected []string, headers map[string]string) error {
@@ -702,13 +753,13 @@ func (c *Cloudflare) verifySchedules(ctx context.Context, account, worker string
 	return nil
 }
 
-func (c *Cloudflare) verifyManagedHTTPS(ctx context.Context, hostname, version string) error {
+func (c *Cloudflare) verifyManagedHTTPS(ctx context.Context, hostname, version string, expectedDemo bool) error {
 	deadline, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
-		if cloudflareHealthReady(deadline, c.healthClient, hostname, version) {
+		if cloudflareHealthReady(deadline, c.healthClient, hostname, version, expectedDemo) {
 			return nil
 		}
 		select {
@@ -719,7 +770,7 @@ func (c *Cloudflare) verifyManagedHTTPS(ctx context.Context, hostname, version s
 	}
 }
 
-func cloudflareHealthReady(ctx context.Context, client *http.Client, hostname, version string) bool {
+func cloudflareHealthReady(ctx context.Context, client *http.Client, hostname, version string, expectedDemo bool) bool {
 	if !cloudflareManagedHostname.MatchString(hostname) {
 		return false
 	}
@@ -736,10 +787,11 @@ func cloudflareHealthReady(ctx context.Context, client *http.Client, hostname, v
 			return false
 		}
 		var result struct {
-			OK      bool   `json:"ok"`
-			Version string `json:"version"`
+			OK       bool   `json:"ok"`
+			Version  string `json:"version"`
+			DemoMode bool   `json:"demoMode"`
 		}
-		if decodeHealthResponse(response, &result) != nil || !result.OK || (check.version && result.Version != version) {
+		if decodeHealthResponse(response, &result) != nil || !result.OK || (!check.version && result.DemoMode != expectedDemo) || (check.version && result.Version != version) {
 			return false
 		}
 	}
@@ -783,7 +835,7 @@ func (c *Cloudflare) Recover(ctx context.Context, kind lifecycle.OperationKind, 
 		if status < 200 || status >= 300 {
 			return errors.New("failed-install Worker identity could not be inspected")
 		}
-		if err := c.verifyWorkerSettings(ctx, account, worker, databases[0].UUID, candidate.Release.Version, nil, headers); err != nil {
+		if err := c.verifyWorkerSettings(ctx, account, worker, databases[0].UUID, candidate.Release.Version, nil, nil, headers); err != nil {
 			return errors.New("refusing to delete a Worker that does not match the owned failed install")
 		}
 		if err := c.cloudflareJSON(ctx, http.MethodDelete, c.baseURL+"/accounts/"+account+"/workers/scripts/"+worker, headers, nil, nil); err != nil {

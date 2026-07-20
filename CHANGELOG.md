@@ -6,6 +6,38 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.30] - 2026-07-19
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not GA.
+
+### Fixed
+
+- Every deployment target now defaults to production data mode. Demo mode is
+  available only through an explicit opt-in checkbox.
+- Docker Desktop no longer hard-codes `DEMO_MODE=true`; it generates protected
+  session and encryption secrets and preserves them across lifecycle updates.
+- Docker Desktop prerequisite installation no longer suppresses installer and
+  administrator interaction, and the apply action reports durable progress and
+  errors instead of appearing inactive.
+- Remote Linux now exposes the production/demo choice that its adapter already
+  supported and defaults to production data mode.
+- Cloudflare production deployments override the release bundle's demo
+  default, install protected Worker secret bindings, require a first-run setup
+  token, and verify the selected mode over managed HTTPS.
+- Azure production deployments provision a dedicated PostgreSQL flexible
+  server, pass generated secrets through secure ARM parameters, require a
+  first-run setup token, and reject RepoWrangler bundles that predate the
+  production Azure contract.
+
+### Verification
+
+- All Ranch Hand Go tests and vet passed, including production-mode Docker,
+  Cloudflare, and Azure adapter tests.
+- The production web interface typechecked and built successfully.
+- RepoWrangler v1.0.18 passed 234 tests, workspace typechecks, production build,
+  release-contract tests, and Azure Bicep compilation.
+
 ## [0.1.0-rc.29] - 2026-07-19
 
 **Classification: Public Preview.** Publicly downloadable and intended for

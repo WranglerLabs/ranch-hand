@@ -12,12 +12,11 @@ import (
 )
 
 type AzureContainerApps struct {
-	client            *http.Client
-	healthClient      *http.Client
-	baseURL           string
-	mu                sync.RWMutex
-	expectedImages    map[string]string
-	verifyPublicImage func(context.Context, string) error
+	client         *http.Client
+	healthClient   *http.Client
+	baseURL        string
+	mu             sync.RWMutex
+	expectedImages map[string]string
 }
 
 func NewAzureContainerApps() *AzureContainerApps {
@@ -28,16 +27,7 @@ func NewAzureContainerApps() *AzureContainerApps {
 }
 
 func newAzureContainerApps(client *http.Client, baseURL string) *AzureContainerApps {
-	registryClient := &http.Client{
-		Timeout:       30 * time.Second,
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
-	}
-	return &AzureContainerApps{
-		client: client, healthClient: client, baseURL: strings.TrimRight(baseURL, "/"), expectedImages: make(map[string]string),
-		verifyPublicImage: func(ctx context.Context, image string) error {
-			return verifyPublicGHCRImage(ctx, registryClient, image)
-		},
-	}
+	return &AzureContainerApps{client: client, healthClient: client, baseURL: strings.TrimRight(baseURL, "/"), expectedImages: make(map[string]string)}
 }
 
 func (a *AzureContainerApps) Preflight(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) Report {

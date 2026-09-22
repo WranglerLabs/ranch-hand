@@ -20,13 +20,11 @@ import (
 	"github.com/WranglerLabs/ranch-hand/internal/bundle"
 	"github.com/WranglerLabs/ranch-hand/internal/lifecycle"
 	"github.com/WranglerLabs/ranch-hand/internal/plan"
-	productrelease "github.com/WranglerLabs/ranch-hand/internal/release"
 )
 
 const remoteMarkerName = ".ranch-hand-installation.json"
 
 var remoteDigestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
-var remoteImageIDPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 var remoteScriptPattern = regexp.MustCompile(`(?i)<script[^>]+src=["']([^"']+\.js)["']`)
 var remoteSetupTokenPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{32,256}$`)
 
@@ -48,7 +46,6 @@ type remoteInstallation struct {
 	VolumeName        string `json:"volumeName"`
 	Image             string `json:"image"`
 	RuntimeImage      string `json:"runtimeImage,omitempty"`
-	RuntimeImageID    string `json:"runtimeImageId,omitempty"`
 	ComposeSHA256     string `json:"composeSha256"`
 	OverrideSHA256    string `json:"overrideSha256"`
 	EnvironmentSHA256 string `json:"environmentSha256"`
@@ -59,12 +56,6 @@ func (a *RemoteLinuxCompose) Backup(context.Context, plan.DeploymentPlan, string
 }
 
 func (a *RemoteLinuxCompose) Apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, _ string, staged bundle.StagedBundle, backups lifecycle.OperationBackups, credentials Credentials) error {
-	if kind == lifecycle.Uninstall {
-		if backups.Selected != nil || backups.Safety != nil {
-			return errors.New("remote Linux uninstall does not accept backup state")
-		}
-		return a.removeOwnedDeployment(ctx, candidate, credentials)
-	}
 	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return errors.New("the remote Linux Compose adapter currently supports only a new evaluation install")
 	}
@@ -84,27 +75,14 @@ func (a *RemoteLinuxCompose) Apply(ctx context.Context, kind lifecycle.Operation
 	if a.prepareReleaseImage == nil {
 		return errors.New("remote Linux verified image preparation is unavailable")
 	}
-	runtimeImage, err := a.prepareReleaseImage(ctx, candidate, credentials, identity.Image, staged.ProvenancePath)
+	runtimeImage, err := a.prepareReleaseImage(ctx, candidate, credentials, identity.Image)
 	if err != nil {
 		return fmt.Errorf("prepare verified release image on remote Linux: %w", err)
 	}
-	return a.apply(ctx, kind, candidate, staged, backups, credentials, runtimeImage, true)
+	return a.apply(ctx, kind, candidate, staged, backups, credentials, runtimeImage)
 }
 
-func (a *RemoteLinuxCompose) removeOwnedDeployment(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) error {
-	host, err := a.connect(ctx, candidate, credentials)
-	if err != nil {
-		return err
-	}
-	defer host.Close()
-	marker, err := readRemoteMarker(ctx, host, candidate)
-	if err != nil {
-		return errors.New("refusing remote uninstall without the exact Ranch Hand ownership marker")
-	}
-	return cleanupOwnedRemote(ctx, host, candidate, marker)
-}
-
-func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, staged bundle.StagedBundle, backups lifecycle.OperationBackups, credentials Credentials, runtimeImage string, requireSetupToken bool) error {
+func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, staged bundle.StagedBundle, backups lifecycle.OperationBackups, credentials Credentials, runtimeImage string) error {
 	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return errors.New("the remote Linux Compose adapter currently supports only a new evaluation install")
 	}
@@ -118,12 +96,7 @@ func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.Operation
 	if staged.Target != "remote-linux-compose" {
 		return errors.New("remote Linux adapter requires a remote-linux-compose bundle")
 	}
-	if requireSetupToken {
-		if err := validateRemoteSetupToken(candidate, credentials); err != nil {
-			return err
-		}
-	}
-	environment, err := remoteEnvironment(candidate, credentials, requireSetupToken)
+	environment, err := remoteEnvironment(candidate, credentials)
 	if err != nil {
 		return err
 	}
@@ -135,10 +108,9 @@ func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.Operation
 	if runtimeImage == "" || runtimeImage == identity.Image {
 		return errors.New("remote Linux requires a separately verified loaded release image")
 	}
-	loadedRuntimeID, inspectErr := host.Run(ctx, "docker image inspect --format '{{.Id}}' "+shellQuote(runtimeImage), nil)
-	if inspectErr != nil || !remoteImageIDPattern.MatchString(loadedRuntimeID) {
-		if loadedRuntimeID != "" {
-			return fmt.Errorf("verify loaded release image before target mutation: %w: %s", inspectErr, boundedCommandFailure(loadedRuntimeID))
+	if output, inspectErr := host.Run(ctx, "docker image inspect --format '{{.Id}}' "+shellQuote(runtimeImage), nil); inspectErr != nil || output == "" {
+		if output != "" {
+			return fmt.Errorf("verify loaded release image before target mutation: %w: %s", inspectErr, boundedCommandFailure(output))
 		}
 		return errors.New("verify loaded release image before target mutation: image is unavailable")
 	}
@@ -153,7 +125,7 @@ func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.Operation
 	if err != nil {
 		return err
 	}
-	deploymentID, err := remoteDeploymentID(candidate)
+	deploymentID, err := lifecycle.DeploymentID(candidate)
 	if err != nil {
 		return err
 	}
@@ -167,9 +139,8 @@ func (a *RemoteLinuxCompose) apply(ctx context.Context, kind lifecycle.Operation
 		VolumeName: volumeName, Image: identity.Image, ComposeSHA256: bytesSHA256(compose),
 		OverrideSHA256: bytesSHA256(override), EnvironmentSHA256: bytesSHA256(environment),
 	}
-	marker.SchemaVersion = "1.2"
+	marker.SchemaVersion = "1.1"
 	marker.RuntimeImage = runtimeImage
-	marker.RuntimeImageID = loadedRuntimeID
 	markerJSON, err := json.MarshalIndent(marker, "", "  ")
 	if err != nil {
 		return err
@@ -231,7 +202,7 @@ volumes:
 `, imageOverride, containerName, deploymentID, version, volumeName, deploymentID, version)
 }
 
-func remoteEnvironment(candidate plan.DeploymentPlan, credentials Credentials, requireSetupToken bool) ([]byte, error) {
+func remoteEnvironment(candidate plan.DeploymentPlan, credentials Credentials) ([]byte, error) {
 	version := candidate.Release.Version
 	demoMode := candidate.Configuration["demoMode"]
 	if demoMode == "" {
@@ -257,7 +228,7 @@ func remoteEnvironment(candidate plan.DeploymentPlan, credentials Credentials, r
 		return nil, fmt.Errorf("generate RepoWrangler encryption key: %w", err)
 	}
 	secrets := base + "SESSION_SECRET=" + sessionSecret + "\nSECRET_ENCRYPTION_KEY=" + encryptionKey + "\n"
-	if requireSetupToken && candidate.Configuration["demoMode"] == "false" {
+	if candidate.Target.Kind == "remote-linux-compose" && candidate.Configuration["demoMode"] == "false" {
 		if err := validateRemoteSetupToken(candidate, credentials); err != nil {
 			return nil, err
 		}
@@ -353,55 +324,20 @@ func readRemoteMarker(ctx context.Context, host remoteHost, candidate plan.Deplo
 	if err := decoder.Decode(&marker); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
 		return remoteInstallation{}, errors.New("remote Ranch Hand ownership marker is invalid")
 	}
-	deploymentID, err := remoteDeploymentID(candidate)
+	deploymentID, err := lifecycle.DeploymentID(candidate)
 	if err != nil {
 		return remoteInstallation{}, err
 	}
-	validSchema := (marker.SchemaVersion == "1.0" && marker.RuntimeImage == "" && marker.RuntimeImageID == "") ||
-		(marker.SchemaVersion == "1.1" && marker.RuntimeImageID == "" && validLoadedRuntimeImage(marker.Image, marker.RuntimeImage, marker.Version)) ||
-		(marker.SchemaVersion == "1.2" && remoteImageIDPattern.MatchString(marker.RuntimeImageID) && validLoadedRuntimeImage(marker.Image, marker.RuntimeImage, marker.Version))
+	validSchema := (marker.SchemaVersion == "1.0" && marker.RuntimeImage == "") || (marker.SchemaVersion == "1.1" && validLoadedRuntimeImage(marker.Image, marker.RuntimeImage))
 	if !validSchema || marker.DeploymentID != deploymentID || marker.Version != candidate.Release.Version || marker.ArtifactSHA256 != candidate.Release.ArtifactSHA256 || marker.ProjectName != candidate.Configuration["projectName"] || marker.ContainerName != marker.ProjectName+"-server" || marker.VolumeName != marker.ProjectName+"-data" || !remotePinnedImage(marker.Image) || !remoteDigestPattern.MatchString(marker.ComposeSHA256) || !remoteDigestPattern.MatchString(marker.OverrideSHA256) || !remoteDigestPattern.MatchString(marker.EnvironmentSHA256) {
 		return remoteInstallation{}, errors.New("remote Ranch Hand ownership marker does not match this deployment")
 	}
 	return marker, nil
 }
 
-// remoteDeploymentID preserves the public local-WSL plan identity after the
-// WSL adapter translates that plan into the private remote-host shape used by
-// the shared Compose implementation. Ownership markers must match the
-// lifecycle journal created from the public plan, not the adapter's internal
-// transport representation.
-func remoteDeploymentID(candidate plan.DeploymentPlan) (string, error) {
-	if candidate.Target.Kind == "remote-linux-compose" &&
-		candidate.Configuration["user"] == "wsl" &&
-		candidate.Configuration["port"] == "22" &&
-		candidate.Configuration["hostKeySha256"] == "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" {
-		configuration := map[string]string{
-			"distribution": candidate.Configuration["host"],
-			"projectName":  candidate.Configuration["projectName"],
-		}
-		if demoMode, present := candidate.Configuration["demoMode"]; present {
-			configuration["demoMode"] = demoMode
-		}
-		return lifecycle.DeploymentID(plan.DeploymentPlan{
-			SchemaVersion: candidate.SchemaVersion,
-			Name:          candidate.Name,
-			Release:       candidate.Release,
-			Target:        plan.Target{Kind: "local-wsl-compose"},
-			Configuration: configuration,
-		})
-	}
-	return lifecycle.DeploymentID(candidate)
-}
-
-func validLoadedRuntimeImage(image, runtimeImage, version string) bool {
+func validLoadedRuntimeImage(image, runtimeImage string) bool {
 	companion, err := companionForImage(image)
-	if err == nil {
-		return runtimeImage == companion.runtimeImage
-	}
-	return publishedRepoWranglerImage.MatchString(image) &&
-		productrelease.ValidateVersion(version) == nil &&
-		runtimeImage == "repo-wrangler-ranch-hand:"+version
+	return err == nil && runtimeImage == companion.runtimeImage
 }
 
 func remotePinnedImage(value string) bool {
@@ -437,16 +373,10 @@ func verifyRemoteResources(ctx context.Context, host remoteHost, marker remoteIn
 		return errors.New("remote container does not use the verified immutable image")
 	}
 	if marker.RuntimeImage != "" {
+		companion, companionErr := companionForImage(marker.Image)
 		imageID, imageErr := host.Run(ctx, "docker container inspect --format '{{.Image}}' "+shellQuote(marker.ContainerName), nil)
-		if marker.RuntimeImageID != "" {
-			if imageErr != nil || imageID != marker.RuntimeImageID {
-				return errors.New("remote container runtime image ID does not match the verified immutable image")
-			}
-		} else {
-			companion, companionErr := companionForImage(marker.Image)
-			if companionErr != nil || imageErr != nil || !companionLoadedImageMatches(companion, imageID) {
-				return errors.New("remote container runtime image ID does not match the verified immutable image")
-			}
+		if companionErr != nil || imageErr != nil || !companionLoadedImageMatches(companion, imageID) {
+			return errors.New("remote container runtime image ID does not match the verified immutable image")
 		}
 	}
 	running, err := host.Run(ctx, "docker container inspect --format '{{.State.Running}}' "+shellQuote(marker.ContainerName), nil)
@@ -572,12 +502,6 @@ func directRemoteHealthReady(ctx context.Context, client *http.Client, host, ver
 }
 
 func (a *RemoteLinuxCompose) Recover(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, _ string, backups lifecycle.OperationBackups, credentials Credentials) error {
-	if kind == lifecycle.Uninstall {
-		if backups.Selected != nil || backups.Safety != nil {
-			return errors.New("remote Linux uninstall recovery does not accept backup state")
-		}
-		return a.removeOwnedDeployment(ctx, candidate, credentials)
-	}
 	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return errors.New("remote Linux recovery currently supports only a failed new evaluation install")
 	}

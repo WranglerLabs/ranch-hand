@@ -31,12 +31,11 @@ const (
 var digestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 type StagedBundle struct {
-	Product        string `json:"product"`
-	Version        string `json:"version"`
-	Target         string `json:"target"`
-	Path           string `json:"path"`
-	CacheHit       bool   `json:"cacheHit"`
-	ProvenancePath string `json:"-"`
+	Product  string `json:"product"`
+	Version  string `json:"version"`
+	Target   string `json:"target"`
+	Path     string `json:"path"`
+	CacheHit bool   `json:"cacheHit"`
 }
 
 type stagedFile struct {
@@ -167,7 +166,7 @@ func (s *Stager) Stage(verified productrelease.VerifiedArtifact) (StagedBundle, 
 }
 
 func stagedResult(verified productrelease.VerifiedArtifact, destination string, cacheHit bool) StagedBundle {
-	return StagedBundle{Product: productrelease.Product, Version: verified.Version, Target: verified.Target, Path: destination, CacheHit: cacheHit, ProvenancePath: verified.ProvenancePath}
+	return StagedBundle{Product: productrelease.Product, Version: verified.Version, Target: verified.Target, Path: destination, CacheHit: cacheHit}
 }
 
 func validateVerifiedArtifact(verified productrelease.VerifiedArtifact) error {

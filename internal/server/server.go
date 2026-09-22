@@ -40,10 +40,6 @@ type releaseDiscoverer interface {
 	Discover(context.Context, string, string) (productrelease.DiscoveredRelease, error)
 }
 
-type releaseLister interface {
-	List(context.Context, string) ([]productrelease.DiscoveredRelease, error)
-}
-
 type targetPreflighter interface {
 	Preflight(context.Context, plan.DeploymentPlan, adapter.Credentials) adapter.Report
 }
@@ -84,7 +80,6 @@ type Server struct {
 	ui                fs.FS
 	releaseVerifier   releaseVerifier
 	releaseDiscoverer releaseDiscoverer
-	releaseLister     releaseLister
 	verifiedMu        sync.RWMutex
 	verified          map[string]productrelease.VerifiedArtifact
 	targets           targetPreflighter
@@ -132,10 +127,9 @@ func NewWithDependencies(token, version string, ui fs.FS, verifier releaseVerifi
 
 func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, targets targetPreflighter, stager bundleStager, coordinator operationRunner, installations installationReader, rollbackPool rollbackPoolManager) http.Handler {
 	discoverer, _ := verifier.(releaseDiscoverer)
-	lister, _ := verifier.(releaseLister)
 	cleaner, _ := targets.(targetRemnantCleaner)
 	prerequisites, _ := targets.(targetPrerequisiteInstaller)
-	s := &Server{token: token, version: version, ui: ui, releaseVerifier: verifier, releaseDiscoverer: discoverer, releaseLister: lister, verified: make(map[string]productrelease.VerifiedArtifact), targets: targets, remnantCleaner: cleaner, prerequisites: prerequisites, stager: stager, coordinator: coordinator, installations: installations, rollbackPool: rollbackPool, readyPlans: make(map[string]bool)}
+	s := &Server{token: token, version: version, ui: ui, releaseVerifier: verifier, releaseDiscoverer: discoverer, verified: make(map[string]productrelease.VerifiedArtifact), targets: targets, remnantCleaner: cleaner, prerequisites: prerequisites, stager: stager, coordinator: coordinator, installations: installations, rollbackPool: rollbackPool, readyPlans: make(map[string]bool)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", s.live)
 	mux.Handle("GET /api/v1/status", s.authorize(http.HandlerFunc(s.status)))
@@ -160,7 +154,6 @@ func newWithServices(token, version string, ui fs.FS, verifier releaseVerifier, 
 	mux.Handle("POST /api/v1/installations/{deploymentID}/rollback-pool/prune", s.authorize(http.HandlerFunc(s.pruneRollbackPool)))
 	mux.Handle("GET /api/v1/diagnostics", s.authorize(http.HandlerFunc(s.exportDiagnostics)))
 	mux.Handle("POST /api/v1/releases/verify", s.authorize(http.HandlerFunc(s.verifyRelease)))
-	mux.Handle("GET /api/v1/releases", s.authorize(http.HandlerFunc(s.listReleases)))
 	mux.Handle("GET /api/v1/releases/recommended", s.authorize(http.HandlerFunc(s.recommendedRelease)))
 	mux.Handle("/", s.spa())
 	return s.securityHeaders(mux)
@@ -263,19 +256,6 @@ func (s *Server) recommendedRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"release": discovered})
-}
-
-func (s *Server) listReleases(w http.ResponseWriter, r *http.Request) {
-	if s.releaseLister == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "release catalog is unavailable"})
-		return
-	}
-	releases, err := s.releaseLister.List(r.Context(), r.URL.Query().Get("target"))
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"releases": releases})
 }
 
 func (s *Server) listActiveOperations(w http.ResponseWriter, _ *http.Request) {
@@ -556,7 +536,7 @@ func (s *Server) uninstallInstallation(w http.ResponseWriter, r *http.Request) {
 	}
 	defer request.Credentials.Clear()
 	if !request.Confirmed || !request.DeleteData {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "permanent managed removal requires confirmation that deployment data will be deleted"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "permanent WSL removal requires confirmation that deployment data will be deleted"})
 		return
 	}
 	if err := request.Credentials.Validate(); err != nil {
@@ -573,8 +553,8 @@ func (s *Server) uninstallInstallation(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "installation inventory could not be read safely"})
 		return
 	}
-	if record.State != lifecycle.InstallationActive {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "managed uninstall requires an active Ranch Hand installation"})
+	if record.State != lifecycle.InstallationActive || record.Target != "local-wsl-compose" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "managed uninstall is currently enabled only for an active local WSL Compose deployment"})
 		return
 	}
 	candidate, err := plan.DecodeAndValidate(record.Plan)
@@ -586,27 +566,6 @@ func (s *Server) uninstallInstallation(w http.ResponseWriter, r *http.Request) {
 	if err != nil || identity != deploymentID || candidate.Release.Version != record.Version {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "the installation record does not match its deployment identity"})
 		return
-	}
-	if candidate.Target.Kind != record.Target {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "the installation target does not match its recorded deployment plan"})
-		return
-	}
-	switch candidate.Target.Kind {
-	case "azure-container-apps":
-		if strings.TrimSpace(request.Credentials.AzureAccessToken) == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Azure uninstall requires a temporary ARM access token"})
-			return
-		}
-	case "cloudflare":
-		if strings.TrimSpace(request.Credentials.CloudflareAPIToken) == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Cloudflare uninstall requires a scoped API token"})
-			return
-		}
-	case "remote-linux-compose":
-		if strings.TrimSpace(request.Credentials.SSHPassword) == "" && strings.TrimSpace(request.Credentials.SSHPrivateKey) == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "remote Linux uninstall requires an SSH password or private key"})
-			return
-		}
 	}
 	result, err := s.coordinator.Run(r.Context(), operations.Request{
 		Kind: lifecycle.Uninstall, Plan: candidate, FromVersion: record.Version, Credentials: request.Credentials,
@@ -682,19 +641,7 @@ func (s *Server) preflightTarget(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "verified artifact preflight failed", "artifact": artifactReport})
 		return
 	}
-	report := adapter.Report{}
-	if stagedTargets, ok := s.targets.(interface {
-		PreflightStaged(context.Context, plan.DeploymentPlan, bundle.StagedBundle, adapter.Credentials) adapter.Report
-	}); ok && s.stager != nil {
-		staged, stageErr := s.stager.Stage(verified)
-		if stageErr != nil {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "stage verified bundle for live target preflight: " + stageErr.Error()})
-			return
-		}
-		report = stagedTargets.PreflightStaged(r.Context(), request.Plan, staged, request.Credentials)
-	} else {
-		report = s.targets.Preflight(r.Context(), request.Plan, request.Credentials)
-	}
+	report := s.targets.Preflight(r.Context(), request.Plan, request.Credentials)
 	report = s.annotateLifecycleTarget(request.Plan, report)
 	if report.Ready {
 		if key, err := planSessionKey(request.Plan); err == nil {

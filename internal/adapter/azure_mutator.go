@@ -28,14 +28,8 @@ func (a *AzureContainerApps) Backup(context.Context, plan.DeploymentPlan, string
 }
 
 func (a *AzureContainerApps) Apply(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, _ string, staged bundle.StagedBundle, backups lifecycle.OperationBackups, credentials Credentials) error {
-	if kind == lifecycle.Uninstall {
-		if backups.Selected != nil || backups.Safety != nil {
-			return errors.New("Azure uninstall does not accept backup state")
-		}
-		return a.removeOwnedDeployment(ctx, candidate, credentials)
-	}
 	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
-		return errors.New("the Azure Container Apps adapter currently supports only a new installation")
+		return errors.New("the Azure Container Apps adapter currently supports only a new evaluation install")
 	}
 	if err := credentials.Validate(); err != nil {
 		return err
@@ -53,26 +47,9 @@ func (a *AzureContainerApps) Apply(ctx context.Context, kind lifecycle.Operation
 	if staged.Target != "azure-container-apps" {
 		return errors.New("Azure adapter requires an azure-container-apps bundle")
 	}
-	if a.verifyPublicImage == nil {
-		return errors.New("Azure public image verifier is unavailable")
-	}
-	if err := a.verifyPublicImage(ctx, identity.Image); err != nil {
-		return fmt.Errorf("verify exact release image before Azure mutation: %w", err)
-	}
 	template, err := readARMTemplate(staged)
 	if err != nil {
 		return err
-	}
-	demoMode := candidate.Configuration["demoMode"]
-	if demoMode == "" {
-		demoMode = "true"
-	}
-	productionData := demoMode == "false"
-	if productionData && !armTemplateSupports(template, "provisionPostgres", "postgresServerName", "postgresAdminPassword", "sessionSecret", "secretEncryptionKey", "setupToken") {
-		return errors.New("the selected RepoWrangler Azure bundle predates the PostgreSQL production deployment contract; select v1.0.18 or newer")
-	}
-	if productionData && !remoteSetupTokenPattern.MatchString(credentials.SetupToken) {
-		return errors.New("Azure production-data installation requires a generated 32-256 character setup token")
 	}
 	deploymentID, err := lifecycle.DeploymentID(candidate)
 	if err != nil {
@@ -106,33 +83,12 @@ func (a *AzureContainerApps) Apply(ctx context.Context, kind lifecycle.Operation
 		"image":                        armValue(identity.Image),
 		"containerAppName":             armValue(candidate.Configuration["appName"]),
 		"containerAppsEnvironmentName": armValue(candidate.Configuration["environmentName"]),
-		"demoMode":                     armValue(demoMode == "true"),
-		"postgres":                     armValue(productionData),
+		"demoMode":                     armValue(true),
+		"postgres":                     armValue(false),
 		"keyVaultName":                 armValue(""),
 		"authProviders":                armValue("github"),
 		"customDomainName":             armValue(""),
 		"customDomainCertificateName":  armValue(""),
-	}
-	if productionData {
-		sessionSecret, secretErr := randomEnvironmentSecret()
-		if secretErr != nil {
-			return fmt.Errorf("generate Azure session secret: %w", secretErr)
-		}
-		encryptionKey, secretErr := randomEnvironmentSecret()
-		if secretErr != nil {
-			return fmt.Errorf("generate Azure encryption key: %w", secretErr)
-		}
-		postgresPassword, secretErr := randomEnvironmentSecret()
-		if secretErr != nil {
-			return fmt.Errorf("generate Azure PostgreSQL password: %w", secretErr)
-		}
-		parameters["provisionPostgres"] = armValue(true)
-		parameters["postgresServerName"] = armValue(candidate.Configuration["postgresServerName"])
-		parameters["postgresAdminUser"] = armValue("repowrangleradmin")
-		parameters["postgresAdminPassword"] = armValue(postgresPassword)
-		parameters["sessionSecret"] = armValue(sessionSecret)
-		parameters["secretEncryptionKey"] = armValue(encryptionKey)
-		parameters["setupToken"] = armValue(credentials.SetupToken)
 	}
 	deployment := map[string]any{"properties": map[string]any{"mode": "Incremental", "template": template, "parameters": parameters}}
 	if _, err := a.armJSON(ctx, http.MethodPut, deploymentURL, headers, deployment, nil); err != nil {
@@ -140,52 +96,6 @@ func (a *AzureContainerApps) Apply(ctx context.Context, kind lifecycle.Operation
 	}
 	a.rememberExpectedImage(deploymentID, identity.Image)
 	return a.waitForDeployment(ctx, deploymentURL, headers)
-}
-
-func (a *AzureContainerApps) removeOwnedDeployment(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) error {
-	if strings.TrimSpace(credentials.AzureAccessToken) == "" {
-		return errors.New("an in-memory Azure ARM access token is required for uninstall")
-	}
-	deploymentID, err := lifecycle.DeploymentID(candidate)
-	if err != nil {
-		return err
-	}
-	groupURL, _, err := a.azureURLs(candidate)
-	if err != nil {
-		return err
-	}
-	headers := azureHeaders(credentials)
-	var group struct {
-		Tags map[string]string `json:"tags"`
-	}
-	status, readErr := controlPlaneJSON(ctx, a.client, http.MethodGet, groupURL, headers, &group)
-	if status == http.StatusNotFound {
-		return nil
-	}
-	if readErr != nil {
-		return fmt.Errorf("inspect Azure resource group for uninstall: %w", readErr)
-	}
-	if group.Tags["wranglerlabs-ranch-hand-managed"] != "true" || group.Tags["wranglerlabs-ranch-hand-deployment"] != deploymentID || group.Tags["wranglerlabs-ranch-hand-version"] != candidate.Release.Version {
-		return errors.New("refusing to delete an Azure resource group not owned by this exact Ranch Hand deployment")
-	}
-	if _, err := a.armJSON(ctx, http.MethodDelete, groupURL, headers, nil, nil); err != nil {
-		return fmt.Errorf("delete owned Azure resource group: %w", err)
-	}
-	deadline, cancel := context.WithTimeout(ctx, 30*time.Minute)
-	defer cancel()
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-	for {
-		status, _ := controlPlaneJSON(deadline, a.client, http.MethodGet, groupURL, headers, nil)
-		if status == http.StatusNotFound {
-			return nil
-		}
-		select {
-		case <-deadline.Done():
-			return errors.New("owned Azure resource group deletion did not complete within 30 minutes")
-		case <-ticker.C:
-		}
-	}
 }
 
 func armValue(value any) map[string]any { return map[string]any{"value": value} }
@@ -210,21 +120,6 @@ func readARMTemplate(staged bundle.StagedBundle) (json.RawMessage, error) {
 		return nil, errors.New("compiled ARM template is invalid")
 	}
 	return json.RawMessage(contents), nil
-}
-
-func armTemplateSupports(template json.RawMessage, names ...string) bool {
-	var document struct {
-		Parameters map[string]json.RawMessage `json:"parameters"`
-	}
-	if json.Unmarshal(template, &document) != nil {
-		return false
-	}
-	for _, name := range names {
-		if _, present := document.Parameters[name]; !present {
-			return false
-		}
-	}
-	return true
 }
 
 func azureHeaders(credentials Credentials) map[string]string {
@@ -376,16 +271,16 @@ func (a *AzureContainerApps) Verify(ctx context.Context, candidate plan.Deployme
 	if !containerAppsFQDNPattern.MatchString(fqdn) {
 		return errors.New("Azure Container Apps returned an invalid managed HTTPS hostname")
 	}
-	return a.verifyManagedHTTPS(ctx, fqdn, candidate.Release.Version, candidate.Configuration["demoMode"] != "false")
+	return a.verifyManagedHTTPS(ctx, fqdn, candidate.Release.Version)
 }
 
-func (a *AzureContainerApps) verifyManagedHTTPS(ctx context.Context, fqdn, expectedVersion string, expectedDemo bool) error {
+func (a *AzureContainerApps) verifyManagedHTTPS(ctx context.Context, fqdn, expectedVersion string) error {
 	deadline, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
-		if azureHealthReady(deadline, a.healthClient, fqdn, expectedVersion, expectedDemo) {
+		if azureHealthReady(deadline, a.healthClient, fqdn, expectedVersion) {
 			return nil
 		}
 		select {
@@ -396,7 +291,7 @@ func (a *AzureContainerApps) verifyManagedHTTPS(ctx context.Context, fqdn, expec
 	}
 }
 
-func azureHealthReady(ctx context.Context, client *http.Client, fqdn, expectedVersion string, expectedDemo bool) bool {
+func azureHealthReady(ctx context.Context, client *http.Client, fqdn, expectedVersion string) bool {
 	for _, check := range []struct {
 		path    string
 		version bool
@@ -410,11 +305,10 @@ func azureHealthReady(ctx context.Context, client *http.Client, fqdn, expectedVe
 			return false
 		}
 		var result struct {
-			OK       bool   `json:"ok"`
-			Version  string `json:"version"`
-			DemoMode bool   `json:"demoMode"`
+			OK      bool   `json:"ok"`
+			Version string `json:"version"`
 		}
-		if decodeHealthResponse(response, &result) != nil || !result.OK || (!check.version && result.DemoMode != expectedDemo) || (check.version && result.Version != expectedVersion) {
+		if decodeHealthResponse(response, &result) != nil || !result.OK || (check.version && result.Version != expectedVersion) {
 			return false
 		}
 	}
@@ -422,12 +316,6 @@ func azureHealthReady(ctx context.Context, client *http.Client, fqdn, expectedVe
 }
 
 func (a *AzureContainerApps) Recover(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, _ string, backups lifecycle.OperationBackups, credentials Credentials) error {
-	if kind == lifecycle.Uninstall {
-		if backups.Selected != nil || backups.Safety != nil {
-			return errors.New("Azure uninstall recovery does not accept backup state")
-		}
-		return a.removeOwnedDeployment(ctx, candidate, credentials)
-	}
 	if kind != lifecycle.Install || backups.Selected != nil || backups.Safety != nil {
 		return errors.New("Azure recovery currently supports only a failed new evaluation install")
 	}

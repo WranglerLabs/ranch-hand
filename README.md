@@ -2,7 +2,7 @@
 
 Ranch Hand is the standalone, Windows-first lifecycle manager for [RepoWrangler](https://github.com/WranglerLabs/repo-wrangler). It is for operators who want to install and manage RepoWrangler without cloning or forking its source repository. Contributors and advanced operators can still use RepoWrangler's documented deployment recipes directly.
 
-> **Status: Public Preview.** [`v0.1.0-rc.30`](docs/releases/v0.1.0-rc.30.md)
+> **Status: Public Preview.** [`v0.1.0-rc.20`](docs/releases/v0.1.0-rc.20.md)
 > is the primary recommended Windows deployment path for RepoWrangler. It is
 > publicly downloadable and functional, but it is unsigned and not production
 > supported or generally available. See the complete [GA readiness
@@ -13,7 +13,7 @@ Ranch Hand is the standalone, Windows-first lifecycle manager for [RepoWrangler]
 - **Recommended — use the Public Preview:** use the public
   [Ranch Hand for Windows guide](https://wranglerlabs.org/ranch-hand) to download
   stable unsigned preview asset, verify it, launch it, and complete a
-  supported production-data or optional demo deployment. A GitHub account is not required.
+  supported evaluation deployment. A GitHub account is not required.
 - **Wait for the signed GA installer:** the first signed stable release remains
   gated on Authenticode signing and clean-Windows/real-target UAT.
 - **Manual alternative:** clone or fork
@@ -50,16 +50,9 @@ Plans must never contain passwords, tokens, private keys, client secrets, or pro
 
 ## Release verification
 
-The local interface fetches the current published RepoWrangler catalog for the chosen target, preselects the latest stable release, and lets operators refresh and select any compatible stable or preview release. A specific immutable version remains available under the advanced choice. Release selection is not pinned to the RepoWrangler versions known when Ranch Hand was compiled. Ranch Hand retrieves the official versioned manifest and target bundle over HTTPS, restricts redirects to the trusted GitHub release infrastructure, enforces response-size limits, verifies the declared byte count and SHA-256, and atomically stores the verified bundle in the user's versioned application cache. A matching cached file is hashed again before reuse; partial or mismatched downloads are removed.
+The local interface discovers and preselects the latest published stable RepoWrangler release that contains an artifact for the chosen target. Operators can intentionally select the latest prerelease or enter a specific immutable version under the advanced choice. Ranch Hand retrieves the official versioned manifest and target bundle over HTTPS, restricts redirects to the trusted GitHub release infrastructure, enforces response-size limits, verifies the declared byte count and SHA-256, and atomically stores the verified bundle in the user's versioned application cache. A matching cached file is hashed again before reuse; partial or mismatched downloads are removed.
 
 Ranch Hand also downloads the release's SPDX SBOM and Sigstore provenance bundle. It verifies the Sigstore trust root through TUF, the certificate and transparency-log evidence, the exact RepoWrangler release-workflow identity, the SLSA provenance predicate, and both the deployment bundle and SBOM digests before classifying the release as verified. This verification is built into Ranch Hand and does not require a GitHub account, GitHub CLI, or Cosign installation.
-
-For WSL and Remote Linux, Ranch Hand also resolves the selected release's
-versioned offline Linux image archive at deployment time. It verifies the
-archive digest against that same signed provenance, derives the Docker config
-identity from the verified archive, and refuses a tag, version, or loaded image
-that does not match. This allows an existing Ranch Hand build to consume later
-compatible RepoWrangler releases without weakening the immutable-image boundary.
 
 ## Deployment plans and dry run
 
@@ -78,14 +71,6 @@ files, defaults to the collision-resistant `repo-wrangler-ranch-hand` project,
 creates its Docker-managed data volume, binds
 `127.0.0.1:8080`, and verifies the exact release from Windows.
 
-WSL systemd services do not by themselves keep a distribution running after
-the last Windows-side WSL session exits. Ranch Hand therefore treats persistent
-service hosting as a prerequisite: it preserves existing `%USERPROFILE%\.wslconfig`
-settings, sets the WSL instance and VM idle timeouts to `-1`, restarts WSL once,
-and then verifies Docker and Compose. Apply refuses to create a deployment while
-those persistence settings are absent, so RepoWrangler does not depend on an
-open WSL terminal.
-
 The secret-free plan includes an explicit **Demo mode** toggle, defaulting to
 off. Off starts RepoWrangler with real data mode, generates unique local session
 and credential-encryption secrets, and opens the first-run provider setup flow.
@@ -99,13 +84,13 @@ streams it directly into the selected WSL Docker Engine. Compose uses only that
 loaded image with `pull_policy: never`; the WSL install does not contact GHCR
 and does not require a GitHub account, registry login, or token.
 
-Every active managed deployment appears in **Managed deployments** with an
+This Preview supports WSL evaluation installation and managed permanent
+removal. An active WSL deployment appears in **Managed deployments** with an
 explicit data-deletion confirmation and **Permanently remove deployment**
-action. Managed removal covers Docker Desktop, WSL Compose, remote Linux
-Compose, Azure Container Apps, and Cloudflare Worker plus D1. Each adapter
-rechecks its exact ownership evidence before deleting resources, and cloud or
-remote targets require fresh in-memory credentials. Use the
-[manual removal runbook](docs/uninstall.md) for retain-data removal.
+action. WSL backup, update, restore, rollback, repair, and retain-data uninstall
+remain open lifecycle work. Use the ownership-checked
+[manual removal runbook](docs/uninstall.md) for retain-data removal and targets
+that do not yet expose managed uninstall.
 
 If an install is interrupted after Ranch Hand creates its dedicated directory,
 the next preflight recognizes the matching durable journal and offers
@@ -114,11 +99,11 @@ only resources whose marker, transferred-file hashes, and Docker labels prove
 exact ownership. A committed installation is reported as already installed;
 an unknown directory remains blocked and untouched.
 
-## Local Docker Desktop install
+## Local Docker Desktop evaluation install
 
-If Docker Desktop is absent, Ranch Hand offers an explicit prerequisite action that installs it through Windows Package Manager. Docker Desktop may still require an administrator prompt, acceptance of its first-run terms, and startup of the Linux-container engine. Ranch Hand leaves those required interactions visible and reports installation progress or failure in the interface. After the exact plan passes live Docker preflight and its verified bundle is safely staged, Ranch Hand installs a single loopback-only container. It downloads the release's independently published image archive, verifies its pinned size and SHA-256, loads it through Docker Desktop's Windows-exposed Docker Engine API, and verifies the loaded immutable image ID before creating anything. It then creates or verifies an ownership-labeled persistent Docker volume, labels the container with its Ranch Hand deployment identity, starts it, and verifies `/health/ready` through a fixed loopback-only client. No registry login, host filesystem path, repository clone, Docker CLI, shell, proxy, or public ingress is involved.
+If Docker Desktop is absent, Ranch Hand offers an explicit prerequisite action that installs it through Windows Package Manager. Docker Desktop may still require an administrator prompt, acceptance of its first-run terms, and startup of the Linux-container engine. After the exact plan passes live Docker preflight and its verified bundle is safely staged, Ranch Hand can install the Docker Desktop profile as a single loopback-only evaluation container. It talks directly to Docker Desktop's Windows-exposed Docker Engine API, pulls the manifest's digest-pinned RepoWrangler image, creates or verifies an ownership-labeled persistent Docker volume, labels the container with its Ranch Hand deployment identity, starts it, and verifies `/health/ready` through a fixed loopback-only client. No host filesystem path, repository clone, Docker CLI, shell, proxy, or public ingress is involved.
 
-Production data mode is the default. Ranch Hand generates unique session and credential-encryption secrets, stores them only in the container environment, preserves them across backup-first lifecycle replacements, and opens protected first-run provider onboarding. The plan remains secret-free. Demo mode is an explicit opt-in that uses mock data. Ranch Hand verifies the reported mode before committing the lifecycle operation. A partially failed install can remove only the exact container carrying Ranch Hand's matching ownership labels; an unowned same-named container remains protected.
+The interface requires an explicit confirmation and describes the current boundary before mutation. This path enables demo mode, SQLite, and GitHub authentication; it is not a production configuration. A partially failed install can remove only the exact container carrying Ranch Hand's matching ownership labels. Ranch Hand refuses to replace or recover an unowned container with the selected name.
 
 The same coordinator can create a consistent local backup. Ranch Hand verifies the container and volume ownership labels, briefly stops the running container, streams `/app/data` through Docker's native archive API into its user-scoped backup directory, syncs and hashes the archive, restarts the container, and waits for readiness. The secret-free inventory records the relative locator, byte count, SHA-256, deployment, operation, and release. Local archives have a 64 GiB safety limit; a stopped container remains stopped.
 
@@ -197,7 +182,7 @@ Every committed install and version-changing operation also advances a validated
 
 The Windows interface can export a versioned redacted diagnostics JSON snapshot. It includes lifecycle phases, immutable versions, timestamps, target families, an export-scoped deployment pseudonym, random operation/backup IDs, and safe integrity hashes. It explicitly excludes stable deployment IDs, plans and their deterministic digests, configuration values, backup locators, URLs, hostnames, domains, account/resource identifiers, credentials, environment variables, request bodies, and arbitrary logs. Collection fails closed rather than silently skipping corrupt lifecycle state. See [ADR-0008](docs/adr/0008-redacted-diagnostics-boundary.md).
 
-The coordinator implements install, managed permanent uninstall, backup, and backup-first update/restore/rollback/repair sequencing. It binds `backup-complete` to an exact validated safety-backup record, binds historical restore input to a separate inventory record, stages only the verified plan artifact, and automatically enters recovery if apply, health verification, or the post-apply journal write fails. Recovery receives a cancellation-independent bounded context so a closed browser request cannot abandon a partially mutated target. All five initial targets support bounded evaluation install and ownership-checked permanent uninstall; local Docker Desktop also supports consistent backup and copy-on-write update, restore, rollback, and repair. The remaining non-local lifecycle mutations remain disabled. See [ADR-0002](docs/adr/0002-durable-lifecycle-transactions.md) for phase rules, recovery semantics, and trade-offs.
+The coordinator implements install, backup, and backup-first update/restore/rollback/repair sequencing. It binds `backup-complete` to an exact validated safety-backup record, binds historical restore input to a separate inventory record, stages only the verified plan artifact, and automatically enters recovery if apply, health verification, or the post-apply journal write fails. Recovery receives a cancellation-independent bounded context so a closed browser request cannot abandon a partially mutated target. All five initial targets are wired for the bounded evaluation installs above; local Docker Desktop also supports consistent backup and copy-on-write update, restore, rollback, and repair. Uninstall and the remaining target lifecycle mutations remain disabled. See [ADR-0002](docs/adr/0002-durable-lifecycle-transactions.md) for phase rules, recovery semantics, and trade-offs.
 
 ## Build from source
 

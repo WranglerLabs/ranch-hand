@@ -86,12 +86,6 @@ func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, c
 	if err != nil {
 		return err
 	}
-	if kind == lifecycle.Uninstall {
-		if backups.Selected != nil || backups.Safety != nil {
-			return errors.New("local Docker uninstall does not accept backup state")
-		}
-		return d.removeOwnedDeployment(ctx, candidate, project, dataVolume)
-	}
 	identity, err := bundle.ReadIdentity(staged)
 	if err != nil {
 		return err
@@ -117,52 +111,20 @@ func (d *LocalDocker) Apply(ctx context.Context, kind lifecycle.OperationKind, c
 	if exists {
 		return fmt.Errorf("Docker container %q already exists; Ranch Hand will not replace an unmanaged or unjournaled container", containerName)
 	}
-	runtimeImage, err := d.prepareLocalCompanion(ctx, identity.Image)
-	if err != nil {
+	if err := d.pullImage(ctx, identity.Image); err != nil {
 		return err
 	}
 	if err := d.ensureManagedVolume(ctx, dataVolume, deploymentID); err != nil {
 		return err
 	}
-	environment, err := localContainerEnvironment(candidate, nil)
-	if err != nil {
-		return err
-	}
-	_, err = d.createContainer(ctx, candidate, runtimeImage, dataVolume, containerName, deploymentID, hostIP, hostPort, environment, true)
+	_, err = d.createContainer(ctx, candidate, identity.Image, dataVolume, containerName, deploymentID, hostIP, hostPort, true)
 	return err
 }
 
-func (d *LocalDocker) removeOwnedDeployment(ctx context.Context, candidate plan.DeploymentPlan, project, dataVolume string) error {
-	deploymentID, err := lifecycle.DeploymentID(candidate)
-	if err != nil {
-		return err
-	}
-	containerName := project + "-server"
-	exists, metadata, err := d.containerMetadata(ctx, containerName)
-	if err != nil {
-		return err
-	}
-	if exists {
-		if err := verifyOwnership(metadata.Labels, deploymentID, "container"); err != nil {
-			return err
-		}
-		if metadata.DataVolume != "" && metadata.DataVolume != dataVolume {
-			return errors.New("refusing to remove a local Docker container attached to an unexpected data volume")
-		}
-		if err := d.dockerJSON(ctx, http.MethodDelete, "/containers/"+url.PathEscape(metadata.ID), url.Values{"force": []string{"1"}, "v": []string{"1"}}, nil, http.StatusNoContent, nil); err != nil {
-			return fmt.Errorf("remove owned local Docker container: %w", err)
-		}
-	}
-	if err := d.removeManagedVolumeIfPresent(ctx, dataVolume, deploymentID); err != nil {
-		return fmt.Errorf("remove owned local Docker data volume: %w", err)
-	}
-	return nil
-}
-
-func (d *LocalDocker) createContainer(ctx context.Context, candidate plan.DeploymentPlan, image, dataVolume, containerName, deploymentID, hostIP, hostPort string, environment []string, start bool) (string, error) {
+func (d *LocalDocker) createContainer(ctx context.Context, candidate plan.DeploymentPlan, image, dataVolume, containerName, deploymentID, hostIP, hostPort string, start bool) (string, error) {
 	payload := map[string]any{
 		"Image":        image,
-		"Env":          environment,
+		"Env":          []string{"PORT=8080", "DEMO_MODE=true", "AUTH_PROVIDERS=github", "ENABLE_SCHEDULER=true", "SQLITE_PATH=/app/data/repo-wrangler.db", "APP_VERSION=" + candidate.Release.Version},
 		"ExposedPorts": map[string]any{"8080/tcp": map[string]any{}},
 		"Labels": map[string]string{
 			"com.wranglerlabs.ranch-hand.managed": "true", "com.wranglerlabs.ranch-hand.deployment": deploymentID,
@@ -190,46 +152,6 @@ func (d *LocalDocker) createContainer(ctx context.Context, candidate plan.Deploy
 		}
 	}
 	return created.ID, nil
-}
-
-func localContainerEnvironment(candidate plan.DeploymentPlan, existing []string) ([]string, error) {
-	demoMode := candidate.Configuration["demoMode"]
-	if demoMode == "" {
-		// Preserve the meaning and lifecycle identity of plans created before
-		// Docker Desktop exposed an operating-mode choice.
-		demoMode = "true"
-	}
-	environment := []string{
-		"PORT=8080",
-		"DEMO_MODE=" + demoMode,
-		"AUTH_PROVIDERS=github",
-		"ENABLE_SCHEDULER=true",
-		"SQLITE_PATH=/app/data/repo-wrangler.db",
-		"APP_VERSION=" + candidate.Release.Version,
-		"PUBLIC_BASE_URL=http://" + candidate.Configuration["listenAddress"],
-	}
-	if demoMode == "true" {
-		return environment, nil
-	}
-	values := make(map[string]string, len(existing))
-	for _, entry := range existing {
-		key, value, found := strings.Cut(entry, "=")
-		if found {
-			values[key] = value
-		}
-	}
-	for _, key := range []string{"SESSION_SECRET", "SECRET_ENCRYPTION_KEY"} {
-		value := values[key]
-		if value == "" {
-			generated, err := randomEnvironmentSecret()
-			if err != nil {
-				return nil, fmt.Errorf("generate Docker Desktop %s: %w", strings.ToLower(strings.ReplaceAll(key, "_", " ")), err)
-			}
-			value = generated
-		}
-		environment = append(environment, key+"="+value)
-	}
-	return environment, nil
 }
 
 func (d *LocalDocker) applyReplacement(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, fromVersion string, backups lifecycle.OperationBackups, image, deploymentID, project, hostIP, hostPort string) error {
@@ -295,8 +217,7 @@ func (d *LocalDocker) applyReplacement(ctx context.Context, kind lifecycle.Opera
 	if err := d.verifyManagedVolume(ctx, current.DataVolume, deploymentID); err != nil {
 		return err
 	}
-	runtimeImage, err := d.prepareLocalCompanion(ctx, image)
-	if err != nil {
+	if err := d.pullImage(ctx, image); err != nil {
 		return err
 	}
 	candidateVolume := updateVolumeName(deploymentID, safety.BackupID)
@@ -310,11 +231,7 @@ func (d *LocalDocker) applyReplacement(ctx context.Context, kind lifecycle.Opera
 	if err := d.renameContainer(ctx, current.ID, rollbackName); err != nil {
 		return err
 	}
-	environment, err := localContainerEnvironment(candidate, current.Environment)
-	if err != nil {
-		return err
-	}
-	createdID, err := d.createContainer(ctx, candidate, runtimeImage, candidateVolume, containerName, deploymentID, hostIP, hostPort, environment, false)
+	createdID, err := d.createContainer(ctx, candidate, image, candidateVolume, containerName, deploymentID, hostIP, hostPort, false)
 	if err != nil {
 		return err
 	}
@@ -406,9 +323,8 @@ func (d *LocalDocker) verifyVersion(ctx context.Context, candidate plan.Deployme
 	defer cancel()
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
-	expectedDemo := candidate.Configuration["demoMode"] != "false"
 	for {
-		if localHealthReady(deadline, client, expectedVersion, expectedDemo) {
+		if localHealthReady(deadline, client, expectedVersion) {
 			return nil
 		}
 		select {
@@ -419,7 +335,7 @@ func (d *LocalDocker) verifyVersion(ctx context.Context, candidate plan.Deployme
 	}
 }
 
-func localHealthReady(ctx context.Context, client *http.Client, expectedVersion string, expectedDemo bool) bool {
+func localHealthReady(ctx context.Context, client *http.Client, expectedVersion string) bool {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1/health/ready", nil)
 	if err != nil {
 		return false
@@ -429,11 +345,10 @@ func localHealthReady(ctx context.Context, client *http.Client, expectedVersion 
 		return false
 	}
 	var ready struct {
-		OK       bool `json:"ok"`
-		DemoMode bool `json:"demoMode"`
+		OK bool `json:"ok"`
 	}
 	decodeErr := decodeHealthResponse(response, &ready)
-	if decodeErr != nil || !ready.OK || ready.DemoMode != expectedDemo {
+	if decodeErr != nil || !ready.OK {
 		return false
 	}
 	request, err = http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1/health/live", nil)
@@ -469,16 +384,6 @@ func decodeHealthResponse(response *http.Response, output any) error {
 }
 
 func (d *LocalDocker) Recover(ctx context.Context, kind lifecycle.OperationKind, candidate plan.DeploymentPlan, fromVersion string, backups lifecycle.OperationBackups, _ Credentials) error {
-	if kind == lifecycle.Uninstall {
-		if backups.Selected != nil || backups.Safety != nil {
-			return errors.New("local Docker uninstall recovery does not accept backup state")
-		}
-		project, dataVolume, _, _, err := localDockerInputs(candidate)
-		if err != nil {
-			return err
-		}
-		return d.removeOwnedDeployment(ctx, candidate, project, dataVolume)
-	}
 	if kind == lifecycle.Update || kind == lifecycle.Restore || kind == lifecycle.Rollback || kind == lifecycle.Repair {
 		return d.recoverReplacement(ctx, candidate, fromVersion, backups.Safety)
 	}
@@ -586,11 +491,10 @@ func (d *LocalDocker) startAndVerify(ctx context.Context, metadata dockerContain
 var errDockerNotFound = errors.New("Docker resource not found")
 
 type dockerContainer struct {
-	ID          string
-	Labels      map[string]string
-	Environment []string
-	Running     bool
-	DataVolume  string
+	ID         string
+	Labels     map[string]string
+	Running    bool
+	DataVolume string
 }
 
 func (d *LocalDocker) ensureManagedVolume(ctx context.Context, name, deploymentID string) error {
@@ -678,7 +582,6 @@ func (d *LocalDocker) containerMetadata(ctx context.Context, name string) (bool,
 		ID     string `json:"Id"`
 		Config struct {
 			Labels map[string]string `json:"Labels"`
-			Env    []string          `json:"Env"`
 		} `json:"Config"`
 		State struct {
 			Running bool `json:"Running"`
@@ -699,7 +602,7 @@ func (d *LocalDocker) containerMetadata(ctx context.Context, name string) (bool,
 	if details.ID == "" {
 		return false, dockerContainer{}, errors.New("Docker Engine returned a container without an identity")
 	}
-	metadata := dockerContainer{ID: details.ID, Labels: details.Config.Labels, Environment: details.Config.Env, Running: details.State.Running}
+	metadata := dockerContainer{ID: details.ID, Labels: details.Config.Labels, Running: details.State.Running}
 	for _, mount := range details.Mounts {
 		if mount.Type == "volume" && mount.Destination == "/app/data" {
 			metadata.DataVolume = mount.Name
@@ -804,6 +707,45 @@ func randomBackupToken() (string, error) {
 		return "", fmt.Errorf("create backup identity: %w", err)
 	}
 	return hex.EncodeToString(value), nil
+}
+
+func (d *LocalDocker) pullImage(ctx context.Context, image string) error {
+	query := url.Values{"fromImage": []string{image}}
+	response, err := d.dockerRequest(ctx, http.MethodPost, "/images/create", query, nil)
+	if err != nil {
+		return fmt.Errorf("pull immutable RepoWrangler image: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("pull immutable RepoWrangler image: Docker Engine returned HTTP %d", response.StatusCode)
+	}
+	limited := &io.LimitedReader{R: response.Body, N: maximumDockerResponse + 1}
+	decoder := json.NewDecoder(limited)
+	var consumed int64
+	for {
+		var message struct {
+			Error       string `json:"error"`
+			ErrorDetail struct {
+				Message string `json:"message"`
+			} `json:"errorDetail"`
+		}
+		if err := decoder.Decode(&message); errors.Is(err, io.EOF) {
+			if limited.N == 0 {
+				return errors.New("Docker Engine image-pull stream exceeded the response safety limit")
+			}
+			break
+		} else if err != nil {
+			return errors.New("Docker Engine returned an invalid image-pull stream")
+		}
+		consumed++
+		if consumed > 100_000 {
+			return errors.New("Docker Engine image-pull stream exceeded the event safety limit")
+		}
+		if message.Error != "" || message.ErrorDetail.Message != "" {
+			return errors.New("Docker Engine could not pull the immutable RepoWrangler image")
+		}
+	}
+	return nil
 }
 
 func (d *LocalDocker) dockerJSON(ctx context.Context, method, endpoint string, query url.Values, input any, expectedStatus int, output any) error {

@@ -1,0 +1,389 @@
+package operations
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/WranglerLabs/ranch-hand/internal/adapter"
+	"github.com/WranglerLabs/ranch-hand/internal/bundle"
+	"github.com/WranglerLabs/ranch-hand/internal/lifecycle"
+	"github.com/WranglerLabs/ranch-hand/internal/plan"
+	productrelease "github.com/WranglerLabs/ranch-hand/internal/release"
+)
+
+func operationPlan(version string) plan.DeploymentPlan {
+	return plan.DeploymentPlan{
+		SchemaVersion: plan.CurrentSchemaVersion, Name: "Local RepoWrangler",
+		Release: plan.ReleaseSelection{
+			Version: version, ManifestURL: "https://github.com/WranglerLabs/repo-wrangler/releases/download/" + version + "/release-manifest.json",
+			ManifestSHA256: strings.Repeat("a", 64), ArtifactSHA256: strings.Repeat("b", 64), ArtifactSize: 42,
+		},
+		Target:        plan.Target{Kind: "local-compose"},
+		Configuration: map[string]string{"projectName": "repo-wrangler", "dataVolume": "repo-wrangler-data", "listenAddress": "127.0.0.1:8080"},
+	}
+}
+
+func operationArtifact(candidate plan.DeploymentPlan) productrelease.VerifiedArtifact {
+	return productrelease.VerifiedArtifact{
+		Product: productrelease.Product, Version: candidate.Release.Version, Target: candidate.Target.Kind,
+		ManifestURL: candidate.Release.ManifestURL, ManifestSHA256: candidate.Release.ManifestSHA256,
+		SHA256: candidate.Release.ArtifactSHA256, Size: candidate.Release.ArtifactSize, CachePath: `C:\cache\bundle.tar.gz`,
+		ProvenanceVerified: true, SBOMVerified: true,
+	}
+}
+
+type fakeStager struct {
+	calls int
+	err   error
+}
+
+func (f *fakeStager) Stage(artifact productrelease.VerifiedArtifact) (bundle.StagedBundle, error) {
+	f.calls++
+	if f.err != nil {
+		return bundle.StagedBundle{}, f.err
+	}
+	return bundle.StagedBundle{Product: artifact.Product, Version: artifact.Version, Target: artifact.Target, Path: `C:\stage\bundle`}, nil
+}
+
+type fakeMutator struct {
+	calls            []string
+	applyError       error
+	verifyError      error
+	recoverError     error
+	appliedBackups   lifecycle.OperationBackups
+	recoveredBackups lifecycle.OperationBackups
+}
+
+type failingTransitionStore struct {
+	*lifecycle.Store
+	phase  lifecycle.Phase
+	failed bool
+}
+
+func (f *failingTransitionStore) Transition(deploymentID, operationID string, phase lifecycle.Phase) (lifecycle.Journal, error) {
+	if phase == f.phase && !f.failed {
+		f.failed = true
+		return lifecycle.Journal{}, errors.New("simulated journal write failure")
+	}
+	return f.Store.Transition(deploymentID, operationID, phase)
+}
+
+func (f *fakeMutator) Backup(_ context.Context, _ plan.DeploymentPlan, _ string, _ adapter.Credentials) (lifecycle.BackupArtifact, error) {
+	f.calls = append(f.calls, "backup")
+	return lifecycle.BackupArtifact{Kind: lifecycle.LocalArchive, Locator: "backups/current.tar.gz", Size: 42, SHA256: strings.Repeat("c", 64)}, nil
+}
+
+func (f *fakeMutator) Apply(_ context.Context, _ lifecycle.OperationKind, _ plan.DeploymentPlan, _ string, _ bundle.StagedBundle, backups lifecycle.OperationBackups, _ adapter.Credentials) error {
+	f.calls = append(f.calls, "apply")
+	f.appliedBackups = backups
+	return f.applyError
+}
+
+func (f *fakeMutator) Verify(_ context.Context, _ plan.DeploymentPlan, _ adapter.Credentials) error {
+	f.calls = append(f.calls, "verify")
+	return f.verifyError
+}
+
+func (f *fakeMutator) Recover(_ context.Context, _ lifecycle.OperationKind, _ plan.DeploymentPlan, _ string, backups lifecycle.OperationBackups, _ adapter.Credentials) error {
+	f.calls = append(f.calls, "recover")
+	f.recoveredBackups = backups
+	return f.recoverError
+}
+
+func coordinatorForTest(t *testing.T, mutator *fakeMutator, staged *fakeStager) *Coordinator {
+	t.Helper()
+	store, err := lifecycle.NewStore(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := NewCoordinator(store, staged, NewRegistry(map[string]Mutator{"local-compose": mutator}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return coordinator
+}
+
+func coordinatorAndStoreForTest(t *testing.T, mutator *fakeMutator, staged *fakeStager) (*Coordinator, *lifecycle.Store) {
+	t.Helper()
+	store, err := lifecycle.NewStore(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := NewCoordinator(store, staged, NewRegistry(map[string]Mutator{"local-compose": mutator}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return coordinator, store
+}
+
+func seedInstalledVersion(t *testing.T, coordinator *Coordinator, mutator *fakeMutator, staged *fakeStager, version string) {
+	t.Helper()
+	candidate := operationPlan(version)
+	if result, err := coordinator.Run(context.Background(), Request{Kind: lifecycle.Install, Plan: candidate, Artifact: operationArtifact(candidate)}); err != nil || result.Journal.Phase != lifecycle.Committed {
+		t.Fatalf("seed install failed: %+v, %v", result, err)
+	}
+	mutator.calls = nil
+	mutator.appliedBackups = lifecycle.OperationBackups{}
+	mutator.recoveredBackups = lifecycle.OperationBackups{}
+	staged.calls = 0
+}
+
+func TestInstallCommitsAfterApplyAndVerify(t *testing.T) {
+	mutator, staged := &fakeMutator{}, &fakeStager{}
+	coordinator := coordinatorForTest(t, mutator, staged)
+	candidate := operationPlan("v1.2.3")
+	result, err := coordinator.Run(context.Background(), Request{Kind: lifecycle.Install, Plan: candidate, Artifact: operationArtifact(candidate)})
+	if err != nil || result.Journal.Phase != lifecycle.Committed {
+		t.Fatalf("install failed: %+v, %v", result, err)
+	}
+	if strings.Join(mutator.calls, ",") != "apply,verify" || staged.calls != 1 {
+		t.Fatalf("unexpected operation order: %v, stage=%d", mutator.calls, staged.calls)
+	}
+}
+
+func TestUninstallRemovesTargetWithoutRestagingReleaseAndClosesInventory(t *testing.T) {
+	mutator, staged := &fakeMutator{}, &fakeStager{}
+	coordinator, store := coordinatorAndStoreForTest(t, mutator, staged)
+	seedInstalledVersion(t, coordinator, mutator, staged, "v1.2.3")
+	candidate := operationPlan("v1.2.3")
+
+	result, err := coordinator.Run(context.Background(), Request{
+		Kind: lifecycle.Uninstall, Plan: candidate, FromVersion: "v1.2.3",
+	})
+	if err != nil || result.Journal.Phase != lifecycle.Committed {
+		t.Fatalf("uninstall failed: %+v, %v", result, err)
+	}
+	if strings.Join(mutator.calls, ",") != "apply" || staged.calls != 0 {
+		t.Fatalf("uninstall unexpectedly staged or verified a release: calls=%v stage=%d", mutator.calls, staged.calls)
+	}
+	deploymentID, err := lifecycle.DeploymentID(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Installation(deploymentID)
+	if err != nil || record.State != lifecycle.InstallationUninstalled || record.LastOperationKind != lifecycle.Uninstall {
+		t.Fatalf("uninstall did not close inventory: %+v, %v", record, err)
+	}
+}
+
+func TestRecoveredUninstallStillClosesInventoryAfterIdempotentCleanup(t *testing.T) {
+	mutator, staged := &fakeMutator{}, &fakeStager{}
+	coordinator, store := coordinatorAndStoreForTest(t, mutator, staged)
+	seedInstalledVersion(t, coordinator, mutator, staged, "v1.2.3")
+	mutator.applyError = errors.New("connection ended after target removal")
+	candidate := operationPlan("v1.2.3")
+
+	result, err := coordinator.Run(context.Background(), Request{
+		Kind: lifecycle.Uninstall, Plan: candidate, FromVersion: "v1.2.3",
+	})
+	if err == nil || !result.Recovered || result.Journal.Phase != lifecycle.Recovered {
+		t.Fatalf("uninstall failure did not complete idempotent recovery: %+v, %v", result, err)
+	}
+	deploymentID, identityErr := lifecycle.DeploymentID(candidate)
+	if identityErr != nil {
+		t.Fatal(identityErr)
+	}
+	record, recordErr := store.Installation(deploymentID)
+	if recordErr != nil || record.State != lifecycle.InstallationUninstalled || record.LastOperationKind != lifecycle.Uninstall {
+		t.Fatalf("recovered uninstall left stale active inventory: %+v, %v", record, recordErr)
+	}
+}
+
+func TestUpdateBacksUpBeforeApply(t *testing.T) {
+	mutator, staged := &fakeMutator{}, &fakeStager{}
+	coordinator := coordinatorForTest(t, mutator, staged)
+	seedInstalledVersion(t, coordinator, mutator, staged, "v1.2.3")
+	candidate := operationPlan("v1.2.4")
+	result, err := coordinator.Run(context.Background(), Request{Kind: lifecycle.Update, Plan: candidate, FromVersion: "v1.2.3", Artifact: operationArtifact(candidate)})
+	if err != nil || result.Journal.Phase != lifecycle.Committed || result.Backup == nil {
+		t.Fatalf("update failed: %+v, %v", result, err)
+	}
+	if strings.Join(mutator.calls, ",") != "backup,apply,verify" {
+		t.Fatalf("backup-first ordering violated: %v", mutator.calls)
+	}
+	if mutator.appliedBackups.Safety == nil || mutator.appliedBackups.Safety.BackupID != result.Backup.BackupID {
+		t.Fatal("apply did not receive the exact recorded update backup")
+	}
+}
+
+func TestFailedVerificationRecoversExactBackup(t *testing.T) {
+	mutator := &fakeMutator{}
+	staged := &fakeStager{}
+	coordinator := coordinatorForTest(t, mutator, staged)
+	seedInstalledVersion(t, coordinator, mutator, staged, "v1.2.3")
+	mutator.verifyError = errors.New("unhealthy")
+	candidate := operationPlan("v1.2.4")
+	result, err := coordinator.Run(context.Background(), Request{Kind: lifecycle.Update, Plan: candidate, FromVersion: "v1.2.3", Artifact: operationArtifact(candidate)})
+	if err == nil || !result.Recovered || result.Journal.Phase != lifecycle.Recovered {
+		t.Fatalf("failed update did not recover: %+v, %v", result, err)
+	}
+	if result.Backup == nil || mutator.recoveredBackups.Safety == nil || result.Backup.BackupID != mutator.recoveredBackups.Safety.BackupID {
+		t.Fatal("recovery did not receive the recorded update backup")
+	}
+}
+
+func TestBackupOperationDoesNotStageOrApply(t *testing.T) {
+	mutator, staged := &fakeMutator{}, &fakeStager{}
+	coordinator := coordinatorForTest(t, mutator, staged)
+	seedInstalledVersion(t, coordinator, mutator, staged, "v1.2.3")
+	candidate := operationPlan("v1.2.3")
+	result, err := coordinator.Run(context.Background(), Request{Kind: lifecycle.Backup, Plan: candidate, FromVersion: "v1.2.3"})
+	if err != nil || result.Journal.Phase != lifecycle.Committed || result.Backup == nil {
+		t.Fatalf("backup operation failed: %+v, %v", result, err)
+	}
+	if strings.Join(mutator.calls, ",") != "backup" || staged.calls != 0 {
+		t.Fatalf("backup performed release mutation: %v, stage=%d", mutator.calls, staged.calls)
+	}
+}
+
+func TestRestoreUsesSelectedBackupAndCreatesFreshSafetyBackup(t *testing.T) {
+	mutator, staged := &fakeMutator{}, &fakeStager{}
+	coordinator := coordinatorForTest(t, mutator, staged)
+	seedInstalledVersion(t, coordinator, mutator, staged, "v1.2.3")
+	candidate := operationPlan("v1.2.3")
+	selectedResult, err := coordinator.Run(context.Background(), Request{Kind: lifecycle.Backup, Plan: candidate, FromVersion: "v1.2.3"})
+	if err != nil || selectedResult.Backup == nil {
+		t.Fatalf("create selected restore backup: %+v, %v", selectedResult, err)
+	}
+	mutator.calls = nil
+	staged.calls = 0
+	result, err := coordinator.Run(context.Background(), Request{
+		Kind: lifecycle.Restore, Plan: candidate, FromVersion: "v1.2.3",
+		BackupID: selectedResult.Backup.BackupID, Artifact: operationArtifact(candidate),
+	})
+	if err != nil || result.Journal.Phase != lifecycle.Committed || result.Backup == nil || result.SelectedBackup == nil {
+		t.Fatalf("restore failed: %+v, %v", result, err)
+	}
+	if result.Journal.InputBackupID != selectedResult.Backup.BackupID {
+		t.Fatal("restore journal did not bind its selected input backup")
+	}
+	if strings.Join(mutator.calls, ",") != "backup,apply,verify" ||
+		mutator.appliedBackups.Selected.BackupID != selectedResult.Backup.BackupID ||
+		mutator.appliedBackups.Safety.BackupID != result.Backup.BackupID ||
+		result.Backup.BackupID == selectedResult.Backup.BackupID {
+		t.Fatalf("restore backup roles were not isolated: calls=%v selected=%+v safety=%+v", mutator.calls, mutator.appliedBackups.Selected, mutator.appliedBackups.Safety)
+	}
+}
+
+func TestRollbackUsesPriorBackupAndProtectsCurrentVersion(t *testing.T) {
+	mutator, staged := &fakeMutator{}, &fakeStager{}
+	coordinator := coordinatorForTest(t, mutator, staged)
+	seedInstalledVersion(t, coordinator, mutator, staged, "v1.2.2")
+	updated := operationPlan("v1.2.3")
+	updateResult, err := coordinator.Run(context.Background(), Request{Kind: lifecycle.Update, Plan: updated, FromVersion: "v1.2.2", Artifact: operationArtifact(updated)})
+	if err != nil || updateResult.Backup == nil {
+		t.Fatalf("seed update failed: %+v, %v", updateResult, err)
+	}
+	mutator.calls = nil
+	staged.calls = 0
+	prior := operationPlan("v1.2.2")
+	result, err := coordinator.Run(context.Background(), Request{
+		Kind: lifecycle.Rollback, Plan: prior, FromVersion: "v1.2.3",
+		BackupID: updateResult.Backup.BackupID, Artifact: operationArtifact(prior),
+	})
+	if err != nil || result.Journal.Phase != lifecycle.Committed || result.Backup == nil || result.SelectedBackup == nil {
+		t.Fatalf("rollback failed: %+v, %v", result, err)
+	}
+	if result.Journal.InputBackupID != updateResult.Backup.BackupID {
+		t.Fatal("rollback journal did not bind its selected input backup")
+	}
+	if result.SelectedBackup.Version != "v1.2.2" || result.Backup.Version != "v1.2.3" ||
+		mutator.appliedBackups.Selected.BackupID != updateResult.Backup.BackupID ||
+		mutator.appliedBackups.Safety.BackupID != result.Backup.BackupID {
+		t.Fatalf("rollback did not bind prior and safety backups: %+v", result)
+	}
+}
+
+func TestRepairUsesFreshSafetyBackupAtCurrentVersion(t *testing.T) {
+	mutator, staged := &fakeMutator{}, &fakeStager{}
+	coordinator := coordinatorForTest(t, mutator, staged)
+	seedInstalledVersion(t, coordinator, mutator, staged, "v1.2.3")
+	candidate := operationPlan("v1.2.3")
+	result, err := coordinator.Run(context.Background(), Request{
+		Kind: lifecycle.Repair, Plan: candidate, FromVersion: "v1.2.3", Artifact: operationArtifact(candidate),
+	})
+	if err != nil || result.Journal.Phase != lifecycle.Committed || result.Backup == nil {
+		t.Fatalf("repair failed: %+v, %v", result, err)
+	}
+	if strings.Join(mutator.calls, ",") != "backup,apply,verify" || mutator.appliedBackups.Selected != nil ||
+		mutator.appliedBackups.Safety == nil || mutator.appliedBackups.Safety.BackupID != result.Backup.BackupID || result.Journal.InputBackupID != "" {
+		t.Fatalf("repair did not use only its fresh safety backup: calls=%v backups=%+v", mutator.calls, mutator.appliedBackups)
+	}
+}
+
+func TestAppliedJournalFailureTriggersRecovery(t *testing.T) {
+	base, err := lifecycle.NewStore(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &failingTransitionStore{Store: base, phase: lifecycle.Applied}
+	mutator := &fakeMutator{}
+	coordinator, err := NewCoordinator(store, &fakeStager{}, NewRegistry(map[string]Mutator{"local-compose": mutator}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := operationPlan("v1.2.3")
+	result, err := coordinator.Run(context.Background(), Request{Kind: lifecycle.Install, Plan: candidate, Artifact: operationArtifact(candidate)})
+	if err == nil || !result.Recovered || !strings.Contains(strings.Join(mutator.calls, ","), "recover") {
+		t.Fatalf("journal failure after apply did not recover target: %+v, %v, calls=%v", result, err, mutator.calls)
+	}
+}
+
+func TestRecoverActiveSafelyClosesPreApplyOperation(t *testing.T) {
+	mutator := &fakeMutator{}
+	coordinator, store := coordinatorAndStoreForTest(t, mutator, &fakeStager{})
+	journal, err := store.Begin(lifecycle.Install, operationPlan("v1.2.3"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := coordinator.RecoverActive(context.Background(), journal.DeploymentID, adapter.Credentials{})
+	if err != nil || !result.SafelyClosed || result.Journal.Phase != lifecycle.Failed || len(mutator.calls) != 0 {
+		t.Fatalf("pre-apply operation was not safely closed: %+v, %v, calls=%v", result, err, mutator.calls)
+	}
+}
+
+func TestRecoverActiveReplaysTargetRecoveryAfterApplyMayHaveStarted(t *testing.T) {
+	mutator := &fakeMutator{}
+	coordinator, store := coordinatorAndStoreForTest(t, mutator, &fakeStager{})
+	journal, err := store.Begin(lifecycle.Install, operationPlan("v1.2.3"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err = store.Transition(journal.DeploymentID, journal.OperationID, lifecycle.Staged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := coordinator.RecoverActive(context.Background(), journal.DeploymentID, adapter.Credentials{})
+	if err != nil || !result.Recovered || result.Journal.Phase != lifecycle.Recovered || strings.Join(mutator.calls, ",") != "recover" {
+		t.Fatalf("active target recovery failed: %+v, %v, calls=%v", result, err, mutator.calls)
+	}
+}
+
+func TestRecoverActiveFailureRemainsLockedAndCanBeRetried(t *testing.T) {
+	mutator := &fakeMutator{recoverError: errors.New("temporary target failure")}
+	coordinator, store := coordinatorAndStoreForTest(t, mutator, &fakeStager{})
+	journal, err := store.Begin(lifecycle.Install, operationPlan("v1.2.3"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err = store.Transition(journal.DeploymentID, journal.OperationID, lifecycle.Staged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := coordinator.RecoverActive(context.Background(), journal.DeploymentID, adapter.Credentials{})
+	if err == nil || result.Journal.Phase != lifecycle.RecoveryStarted {
+		t.Fatalf("failed recovery did not remain retryable: %+v, %v", result, err)
+	}
+	active, activeErr := store.Active(journal.DeploymentID)
+	if activeErr != nil || active.Phase != lifecycle.RecoveryStarted {
+		t.Fatalf("failed recovery released its durable lock: %+v, %v", active, activeErr)
+	}
+	mutator.recoverError = nil
+	result, err = coordinator.RecoverActive(context.Background(), journal.DeploymentID, adapter.Credentials{})
+	if err != nil || !result.Recovered || result.Journal.Phase != lifecycle.Recovered || strings.Join(mutator.calls, ",") != "recover,recover" {
+		t.Fatalf("retry did not complete recovery: %+v, %v, calls=%v", result, err, mutator.calls)
+	}
+}

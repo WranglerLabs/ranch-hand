@@ -2,10 +2,7 @@
 
 ## Supported versions
 
-Ranch Hand has not issued a generally available release. The current Public
-Preview is unsigned and is not a supported production release. Preview security
-corrections may require replacing or withdrawing the affected preview artifact;
-trusted stable-release servicing begins at GA.
+Ranch Hand has not issued a generally available release. Security fixes will apply to the newest published release once releases begin.
 
 ## Reporting a vulnerability
 

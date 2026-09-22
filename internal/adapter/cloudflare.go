@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/WranglerLabs/ranch-hand/internal/bundle"
 	"github.com/WranglerLabs/ranch-hand/internal/plan"
 )
 
@@ -102,5 +103,26 @@ func (c *Cloudflare) Preflight(ctx context.Context, candidate plan.DeploymentPla
 	appendCheck(&report, "cloudflare-dedicated-resources", true, "The requested Worker and D1 names are unused and form a dedicated evaluation boundary.")
 	appendCheck(&report, "cloudflare-native-https", true, "The verified Worker bundle uses Cloudflare-managed HTTPS; Ranch Hand does not install a proxy.")
 	report.Ready = true
+	return report
+}
+
+func (c *Cloudflare) PreflightStaged(ctx context.Context, candidate plan.DeploymentPlan, staged bundle.StagedBundle, credentials Credentials) Report {
+	report := c.Preflight(ctx, candidate, credentials)
+	if !report.Ready {
+		return report
+	}
+	identity, err := bundle.ReadIdentity(staged)
+	if err != nil || staged.Target != "cloudflare" {
+		report.Ready = false
+		appendCheck(&report, "cloudflare-release-contract", false, "The verified Cloudflare bundle identity could not be read for capacity preflight.")
+		return report
+	}
+	account, _, _ := cloudflareNames(candidate)
+	if err := c.requireScheduleCapacity(ctx, account, len(identity.Crons), cloudflareHeaders(credentials)); err != nil {
+		report.Ready = false
+		appendCheck(&report, "cloudflare-cron-capacity", false, err.Error())
+		return report
+	}
+	appendCheck(&report, "cloudflare-cron-capacity", true, "The selected account has capacity for every Cron Trigger declared by the verified release bundle.")
 	return report
 }

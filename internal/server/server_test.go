@@ -29,10 +29,12 @@ type fakeReleaseVerifier struct {
 }
 
 type fakeTargetPreflighter struct {
-	credentials adapter.Credentials
-	report      adapter.Report
-	cleaned     plan.DeploymentPlan
-	cleanupErr  error
+	credentials  adapter.Credentials
+	report       adapter.Report
+	staged       bundle.StagedBundle
+	stagedReport adapter.Report
+	cleaned      plan.DeploymentPlan
+	cleanupErr   error
 }
 
 type fakeBundleStager struct {
@@ -118,6 +120,15 @@ func (f *fakeTargetPreflighter) Preflight(_ context.Context, candidate plan.Depl
 	return adapter.Report{Ready: true, Target: candidate.Target.Kind, Checks: []adapter.Check{{Name: "native-api", OK: true, Message: "connected"}}}
 }
 
+func (f *fakeTargetPreflighter) PreflightStaged(ctx context.Context, candidate plan.DeploymentPlan, staged bundle.StagedBundle, credentials adapter.Credentials) adapter.Report {
+	f.staged = staged
+	if f.stagedReport.Checks != nil {
+		f.credentials = credentials
+		return f.stagedReport
+	}
+	return f.Preflight(ctx, candidate, credentials)
+}
+
 func (f *fakeTargetPreflighter) CleanupRemnant(_ context.Context, candidate plan.DeploymentPlan, _ adapter.Credentials) error {
 	f.cleaned = candidate
 	return f.cleanupErr
@@ -198,6 +209,9 @@ func TestCreateExportPreflightAndDryRunVerifiedPlan(t *testing.T) {
 	}
 	if targets.credentials.SSHPassword != "runtime-only" {
 		t.Fatal("target adapter did not receive runtime credential")
+	}
+	if targets.staged.Target != "local-compose" || targets.staged.Version != "v1.2.3" {
+		t.Fatal("live target preflight did not receive the staged verified bundle")
 	}
 	response = authorizedPost(h, "/api/v1/bundles/stage", string(created.Plan))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"staged":true`) {
@@ -334,6 +348,24 @@ func TestManagedWSLUninstallRequiresPermanentDeleteConfirmation(t *testing.T) {
 	response = authorizedPost(h, "/api/v1/installations/"+deploymentID+"/uninstall", `{"confirmed":true,"deleteData":true,"credentials":{}}`)
 	if response.Code != http.StatusOK || runner.request.Kind != lifecycle.Uninstall || runner.request.FromVersion != "v1.2.3" || runner.request.Plan.Target.Kind != "local-wsl-compose" {
 		t.Fatalf("confirmed WSL uninstall was not dispatched: %d %s request=%+v", response.Code, response.Body.String(), runner.request)
+	}
+
+	local := candidate
+	local.Name = "Local Docker Wrangler"
+	local.Target.Kind = "local-compose"
+	local.Configuration = map[string]string{"projectName": "repo-wrangler", "dataVolume": "repo-wrangler-data", "listenAddress": "127.0.0.1:8080"}
+	localEncoded, err := plan.CanonicalJSON(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localID, err := lifecycle.DeploymentID(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader.records = append(reader.records, lifecycle.InstallationRecord{DeploymentID: localID, Target: "local-compose", State: lifecycle.InstallationActive, Version: "v1.2.3", Plan: localEncoded})
+	response = authorizedPost(h, "/api/v1/installations/"+localID+"/uninstall", `{"confirmed":true,"deleteData":true,"credentials":{}}`)
+	if response.Code != http.StatusOK || runner.request.Plan.Target.Kind != "local-compose" {
+		t.Fatalf("confirmed local Docker uninstall was not dispatched: %d %s request=%+v", response.Code, response.Body.String(), runner.request)
 	}
 }
 

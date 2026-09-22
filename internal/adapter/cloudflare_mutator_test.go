@@ -60,6 +60,10 @@ func TestCloudflareEvaluationInstallUsesNativeAPIsAndVerifiesIdentity(t *testing
 			t.Fatal("Cloudflare request omitted authorization")
 		}
 		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/subscriptions"):
+			writeCloudflareResult(w, `[]`)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/workers/scripts"):
+			writeCloudflareResult(w, `[]`)
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/workers/scripts/repo-wrangler") && !strings.HasSuffix(r.URL.Path, "/settings") && !strings.HasSuffix(r.URL.Path, "/subdomain") && !strings.HasSuffix(r.URL.Path, "/schedules"):
 			http.Error(w, "missing", http.StatusNotFound)
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/d1/database"):
@@ -221,6 +225,40 @@ func TestCloudflareRecoveryDeletesOnlyMarkerOwnedResources(t *testing.T) {
 	}
 }
 
+func TestCloudflareUninstallDeletesOnlyMarkerOwnedResources(t *testing.T) {
+	candidate := cloudflareEvaluationPlan()
+	deploymentID, _ := lifecycle.DeploymentID(candidate)
+	var workerDeleted, databaseDeleted bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/d1/database"):
+			writeCloudflareResult(w, `[{"name":"repo-wrangler","uuid":"`+cloudflareTestDatabaseID+`"}]`)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/query"):
+			writeCloudflareResult(w, `[{"success":true,"results":[{"deployment_id":"`+deploymentID+`","release_version":"v1.2.3"}]}]`)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/workers/scripts/repo-wrangler"):
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/settings"):
+			writeCloudflareResult(w, `{"compatibility_date":"2026-07-01","bindings":[{"type":"d1","name":"DB","database_id":"`+cloudflareTestDatabaseID+`"},{"type":"plain_text","name":"APP_VERSION","text":"v1.2.3"}]}`)
+		case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/workers/scripts/repo-wrangler"):
+			workerDeleted = true
+			writeCloudflareResult(w, `{}`)
+		case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/d1/database/"+cloudflareTestDatabaseID):
+			databaseDeleted = true
+			writeCloudflareResult(w, `{}`)
+		default:
+			t.Fatalf("unexpected uninstall request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+	adapter := newCloudflare(server.Client(), server.URL)
+	if err := adapter.Apply(context.Background(), lifecycle.Uninstall, candidate, candidate.Release.Version, bundle.StagedBundle{}, lifecycle.OperationBackups{}, Credentials{CloudflareAPIToken: "cf-token"}); err != nil {
+		t.Fatal(err)
+	}
+	if !workerDeleted || !databaseDeleted {
+		t.Fatal("owned Cloudflare resources were not uninstalled")
+	}
+}
+
 func TestCloudflareRecoveryRefusesUnownedDatabase(t *testing.T) {
 	deleted := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -238,5 +276,71 @@ func TestCloudflareRecoveryRefusesUnownedDatabase(t *testing.T) {
 	err := newCloudflare(server.Client(), server.URL).Recover(context.Background(), lifecycle.Install, cloudflareEvaluationPlan(), "", lifecycle.OperationBackups{}, Credentials{CloudflareAPIToken: "cf-token"})
 	if err == nil || deleted {
 		t.Fatal("Cloudflare recovery deleted or accepted an unowned database")
+	}
+}
+
+func TestCloudflareInstallRejectsExhaustedCronCapacityBeforeMutation(t *testing.T) {
+	databaseCreated := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/d1/database"):
+			writeCloudflareResult(w, `[]`)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/workers/scripts/repo-wrangler"):
+			http.Error(w, "missing", http.StatusNotFound)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/subscriptions"):
+			writeCloudflareResult(w, `[]`)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/workers/scripts"):
+			writeCloudflareResult(w, `[{"id":"one"},{"id":"two"}]`)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/workers/scripts/one/schedules"):
+			writeCloudflareResult(w, `{"schedules":[{"cron":"1 * * * *"},{"cron":"2 * * * *"},{"cron":"3 * * * *"}]}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/workers/scripts/two/schedules"):
+			writeCloudflareResult(w, `{"schedules":[{"cron":"4 * * * *"},{"cron":"5 * * * *"}]}`)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/d1/database"):
+			databaseCreated = true
+			writeCloudflareResult(w, `{"name":"repo-wrangler","uuid":"`+cloudflareTestDatabaseID+`"}`)
+		default:
+			t.Fatalf("unexpected Cloudflare capacity request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	err := newCloudflare(server.Client(), server.URL).Apply(context.Background(), lifecycle.Install, cloudflareEvaluationPlan(), "", stagedCloudflareBundle(t), lifecycle.OperationBackups{}, Credentials{CloudflareAPIToken: "cf-token"})
+	if err == nil || !strings.Contains(err.Error(), "uses 5 of 5 Cron Triggers") {
+		t.Fatalf("expected precise Cron capacity failure, got %v", err)
+	}
+	if databaseCreated {
+		t.Fatal("Cloudflare install created D1 before rejecting exhausted Cron capacity")
+	}
+}
+
+func TestCloudflareErrorIncludesBoundedSanitizedAPIMessage(t *testing.T) {
+	apiMessage := "schedule rejected\r\n" + strings.Repeat("é", 600)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": false,
+			"errors":  []map[string]any{{"code": 10021, "message": apiMessage}},
+		})
+	}))
+	defer server.Close()
+
+	request, err := http.NewRequest(http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = newCloudflare(server.Client(), server.URL).doCloudflare(request, nil)
+	if err == nil {
+		t.Fatal("expected Cloudflare API error")
+	}
+	message := err.Error()
+	if !strings.HasPrefix(message, "Cloudflare returned HTTP 400 (code 10021): schedule rejected") {
+		t.Fatalf("Cloudflare error omitted the API diagnostic: %q", message)
+	}
+	if strings.ContainsAny(message, "\r\n") {
+		t.Fatalf("Cloudflare error retained control characters: %q", message)
+	}
+	detail := strings.TrimPrefix(message, "Cloudflare returned HTTP 400 (code 10021): ")
+	if len([]rune(detail)) != 512 {
+		t.Fatalf("Cloudflare error detail was not bounded to 512 characters: %d", len([]rune(detail)))
 	}
 }

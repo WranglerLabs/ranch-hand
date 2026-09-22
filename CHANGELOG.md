@@ -6,6 +6,74 @@ generally available or production-supported releases.
 
 ## Unreleased
 
+## [0.1.0-rc.27] - 2026-07-19
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- Docker Desktop installation and replacement now load the release's verified
+  public image archive through the native Docker Engine API and verify its
+  immutable image ID, removing the erroneous dependency on anonymous GHCR
+  access.
+- Azure staged preflight now proves that the exact digest-pinned release image
+  is anonymously pullable and content-matches its digest before Ranch Hand can
+  create a resource group.
+
+- WSL real-mode installation no longer inherits the Remote Linux requirement
+  for a generated setup token when the WSL plan is normalized through the
+  shared Compose implementation.
+- The non-Windows WSL adapter now shares the Windows image-loader signature,
+  and CI compiles and tests the Go code on Linux as well as Windows so
+  platform-specific interface drift cannot be merged unnoticed.
+- Managed permanent uninstall now covers Docker Desktop, WSL Compose, Remote
+  Linux Compose, Azure Container Apps, and Cloudflare Worker plus D1. Every
+  adapter verifies its exact ownership evidence before deleting persistent
+  data, and remote or cloud credentials remain in memory only.
+
+### Verification
+
+- A clean real-mode WSL installation with empty credentials applied, passed
+  readiness and exact-version checks, and committed without the Remote Linux
+  setup-token error present in RC26.
+- The deployed first-run API reported no selected identity, the loopback GitHub
+  App manifest omitted webhook fields, and managed uninstall left zero project
+  containers and zero project volumes.
+- Windows validation, Linux Go test/vet, public product-artifact smoke, and both
+  CodeQL analyses passed for the corrected source.
+
+## [0.1.0-rc.26] - 2026-07-19
+
+**Classification: Public Preview.** Publicly downloadable and intended for
+evaluation and feedback; unsigned, not production-supported, and not GA.
+
+### Fixed
+
+- Ranch Hand selects RepoWrangler v1.0.16, whose local and private-network
+  GitHub App manifests omit webhook fields that GitHub rejects when the URL is
+  not publicly reachable over HTTPS.
+- Fresh real-mode deployments choose GitHub or Microsoft Entra ID
+  administrator identity before connecting repositories. Setup remains open
+  until the first verified allowlisted administrator sign-in.
+- Remote real-mode deployments receive a one-time setup token that is shown
+  only in the active Ranch Hand result and retained only in the remote
+  deployment's protected runtime environment.
+- Remote installation results show the exact private-LAN URL to open, and the
+  operator and uninstall documentation now covers every supported target.
+- The v1.0.16 offline trust record pins the registry index, archive manifest,
+  image config, archive SHA-256, and exact byte size.
+
+### Verification
+
+- RepoWrangler v1.0.16 passed audit, typecheck, 230 unit tests, 11 release
+  contract tests, CodeQL, built-server first-run smoke, container first-run
+  smoke, and immutable bundle assembly before publication.
+- Ranch Hand CI downloads the public v1.0.16 artifacts, verifies their exact
+  hashes and identities, loads the offline image, starts the verified Compose
+  deployment, and exercises health, version, identity setup, and loopback
+  GitHub App manifest behavior.
+
 ## [0.1.0-rc.25] - 2026-07-18
 
 **Classification: Public Preview.** Publicly downloadable and intended for

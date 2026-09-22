@@ -21,6 +21,6 @@ func installWSLDockerPrerequisites(context.Context, string, string) error {
 	return errors.New("guided WSL Docker installation is available only in the Windows build")
 }
 
-func loadWSLImageArchive(context.Context, string, string, string, string) error {
+func loadWSLImageArchive(context.Context, string, string, companionImage) error {
 	return errors.New("WSL deployment is available only in Ranch Hand for Windows")
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/WranglerLabs/ranch-hand/internal/bundle"
 	"github.com/WranglerLabs/ranch-hand/internal/plan"
 )
 
@@ -111,6 +112,19 @@ func (r *Registry) Preflight(ctx context.Context, candidate plan.DeploymentPlan,
 	adapter, ok := r.adapters[candidate.Target.Kind]
 	if !ok {
 		return Report{Target: candidate.Target.Kind, Checks: []Check{{Name: "adapter", OK: false, Message: fmt.Sprintf("No adapter is registered for target %q.", candidate.Target.Kind)}}}
+	}
+	return adapter.Preflight(ctx, candidate, credentials)
+}
+
+func (r *Registry) PreflightStaged(ctx context.Context, candidate plan.DeploymentPlan, staged bundle.StagedBundle, credentials Credentials) Report {
+	adapter, ok := r.adapters[candidate.Target.Kind]
+	if !ok {
+		return Report{Target: candidate.Target.Kind, Checks: []Check{{Name: "adapter", OK: false, Message: fmt.Sprintf("No adapter is registered for target %q.", candidate.Target.Kind)}}}
+	}
+	if stagedAdapter, ok := adapter.(interface {
+		PreflightStaged(context.Context, plan.DeploymentPlan, bundle.StagedBundle, Credentials) Report
+	}); ok {
+		return stagedAdapter.PreflightStaged(ctx, candidate, staged, credentials)
 	}
 	return adapter.Preflight(ctx, candidate, credentials)
 }

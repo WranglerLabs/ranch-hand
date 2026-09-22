@@ -80,6 +80,7 @@ func TestAzureEvaluationInstallDeploysVerifiedTemplateAndChecksIdentity(t *testi
 	}))
 	defer server.Close()
 	adapter := newAzureContainerApps(server.Client(), server.URL)
+	adapter.verifyPublicImage = func(context.Context, string) error { return nil }
 	adapter.healthClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Scheme != "https" || !strings.HasSuffix(r.URL.Host, ".azurecontainerapps.io") {
 			t.Fatalf("health verification escaped Azure-managed HTTPS: %s", r.URL)
@@ -131,6 +132,36 @@ func TestAzureInstallRecoveryDeletesOnlyOwnedResourceGroup(t *testing.T) {
 	}
 	if !deleted {
 		t.Fatal("owned failed-install resource group was not deleted")
+	}
+}
+
+func TestAzureUninstallDeletesOnlyExactOwnedResourceGroup(t *testing.T) {
+	candidate := azureEvaluationPlan()
+	deploymentID, err := lifecycle.DeploymentID(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleted := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodDelete {
+			deleted = true
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		if deleted {
+			http.Error(w, "missing", http.StatusNotFound)
+			return
+		}
+		_, _ = io.WriteString(w, `{"tags":{"wranglerlabs-ranch-hand-managed":"true","wranglerlabs-ranch-hand-deployment":"`+deploymentID+`","wranglerlabs-ranch-hand-version":"v1.2.3"}}`)
+	}))
+	defer server.Close()
+	adapter := newAzureContainerApps(server.Client(), server.URL)
+	if err := adapter.Apply(context.Background(), lifecycle.Uninstall, candidate, candidate.Release.Version, bundle.StagedBundle{}, lifecycle.OperationBackups{}, Credentials{AzureAccessToken: "azure-token"}); err != nil {
+		t.Fatal(err)
+	}
+	if !deleted {
+		t.Fatal("owned Azure resource group was not uninstalled")
 	}
 }
 

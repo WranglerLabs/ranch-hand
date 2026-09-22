@@ -190,7 +190,7 @@ func (a *WSLCompose) Apply(ctx context.Context, kind lifecycle.OperationKind, ca
 		return err
 	}
 	staged.Target = "remote-linux-compose"
-	return a.delegate.apply(ctx, kind, normalized, staged, backups, credentials, runtimeImage)
+	return a.delegate.apply(ctx, kind, normalized, staged, backups, credentials, runtimeImage, false)
 }
 
 func (a *WSLCompose) Verify(ctx context.Context, candidate plan.DeploymentPlan, credentials Credentials) error {
